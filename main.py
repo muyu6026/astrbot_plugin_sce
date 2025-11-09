@@ -967,6 +967,10 @@ class MyPlugin(Star):
     
     async def _simulate_browser_refresh(self, game_name, url, session):
         """模拟真实浏览器行为刷新游戏网页，增强token管理"""
+        # 导入所需模块
+        from urllib.parse import urlparse
+        import time
+        import random
         max_retries = 5  # 增加重试次数
         base_delay = 5  # 增加基础延迟时间
         
@@ -1100,9 +1104,11 @@ class MyPlugin(Star):
         from urllib.parse import urlparse
         import time
         
-        # 跟踪是否有成功刷新
-        any_success = False
-        final_token = None
+        # 初始化变量
+        success_count = 0  # 初始化成功计数
+        failure_count = 0  # 初始化失败计数
+        new_token = None  # 初始化新token变量
+        final_token = None  # 初始化最终token变量
         
         # 检查是否有游戏配置
         if not self.game_configs:
@@ -1127,52 +1133,36 @@ class MyPlugin(Star):
                 success, game_token = await self._simulate_browser_refresh(game_name, url, session)
                 
                 if success:
-                    any_success = True
+                    success_count += 1
                     logger.info(f"游戏 {game_name} 刷新成功")
                     
-                    # 如果获取到新token，优先使用
+                    # 如果获取到新token，更新相关变量
                     if game_token:
                         logger.info(f"从游戏 {game_name} 获取到新token")
+                        new_token = game_token
                         final_token = game_token
                         # 立即保存新token
                         self.current_token = final_token
                         self._save_token(final_token)
-                        break  # 获取到token后可以提前退出
+                        # 获取到token后可以提前退出
+                        break
                 else:
+                    failure_count += 1
                     logger.warning(f"游戏 {game_name} 刷新失败")
                 
                 # 随机延迟，模拟真实用户行为
                 await asyncio.sleep(random.uniform(2, 5))
                 
             except Exception as e:
+                failure_count += 1
                 logger.error(f"刷新游戏 {game_name} 时发生异常: {e}")
                 import traceback
                 logger.debug(f"异常堆栈: {traceback.format_exc()}")
                 
                 # 发生异常后短暂休眠
                 await asyncio.sleep(2)
-            
-            try:
-                # 刷新单个游戏，带重试
-                success, game_token = await self._refresh_single_game(game_name, url, session)
                 
-                if success:
-                    success_count += 1
-                    # 如果找到新token，更新new_token
-                    if game_token:
-                        new_token = game_token
-                else:
-                    failure_count += 1
-                
-                # 避免频繁请求，添加延迟，使用随机延迟避免固定间隔
-                import random
-                delay = 2 + random.uniform(0, 1)
-                logger.info(f"等待 {delay:.2f} 秒后刷新下一个游戏")
-                await asyncio.sleep(delay)
-                
-            except Exception as e:
-                failure_count += 1
-                logger.error(f"处理游戏 {game_name} 时发生异常: {e}")
+                # 继续下一个游戏，不再重复刷新同一个游戏
         
         # 统计信息
         logger.info(f"游戏刷新统计: 成功 {success_count}, 失败 {failure_count}, 总计 {len(self.game_configs)}")
