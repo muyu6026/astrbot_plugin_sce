@@ -32,6 +32,24 @@ class JsonHandler:
         return True
     
     @staticmethod
+    def 读取Json字典(文件名: str) -> dict:
+        """读取JSON文件并返回字典"""
+        try:
+            文件路径 = JsonHandler.获取文件路径(文件名, True)
+            if os.path.exists(文件路径):
+                with open(文件路径, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            return {}
+        except Exception as e:
+            print(f"读取JSON文件错误: {e}")
+            return {}
+    
+    @staticmethod
+    def 获取值(数据字典: dict, 键: str, 默认值: any = None) -> any:
+        """安全地从字典中获取值"""
+        return 数据字典.get(键, 默认值)
+    
+    @staticmethod
     def 获取文件路径(文件名: str, 确保目录存在: bool = False) -> str:
         """获取JSON文件的完整路径"""
         # 验证文件名是否合法
@@ -947,89 +965,192 @@ class MyPlugin(Star):
             logger.info("尝试重新启动网页刷新任务")
             asyncio.create_task(self._schedule_web_refresh())
     
-    async def _refresh_single_game(self, game_name, url, session):
-        """刷新单个游戏网页，带重试机制"""
-        max_retries = 3
-        base_delay = 3  # 基础延迟时间（秒）
+    async def _simulate_browser_refresh(self, game_name, url, session):
+        """模拟真实浏览器行为刷新游戏网页，增强token管理"""
+        max_retries = 5  # 增加重试次数
+        base_delay = 5  # 增加基础延迟时间
+        
+        # 更真实的浏览器headers
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Cache-Control': 'max-age=0',
+            'TE': 'trailers'
+        }
         
         for attempt in range(max_retries):
             try:
-                logger.info(f"刷新游戏: {game_name}, URL: {url}, 尝试 {attempt + 1}/{max_retries}")
+                logger.info(f"模拟浏览器刷新游戏: {game_name}, URL: {url}, 尝试 {attempt + 1}/{max_retries}")
                 
-                # 设置headers模拟浏览器请求
-                headers = {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                    'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
-                    'Connection': 'keep-alive'
-                }
+                # 重置session的headers，确保使用最新的headers
+                session.headers.clear()
+                session.headers.update(headers)
                 
-                # 如果当前有token，添加到请求中
+                # 更全面的token传递方式
                 if self.current_token:
-                    # 可以通过header或cookie传递token
+                    # 通过多种方式传递token以增加成功率
+                    session.cookies.set('token', self.current_token, path='/', domain=urlparse(url).netloc)
                     session.headers.update({'Authorization': f'Bearer {self.current_token}'})
-                    session.cookies.set('token', self.current_token)
+                    session.headers.update({'X-Token': self.current_token})
                 
-                # 发送GET请求模拟网页刷新
-                response = session.get(url, headers=headers, timeout=30)
-                response.raise_for_status()
+                # 1. 首先发送一个预检OPTIONS请求
+                try:
+                    options_response = session.options(url, timeout=15)
+                    logger.debug(f"预检请求成功，状态码: {options_response.status_code}")
+                    # 复制预检请求的cookies到主请求
+                    for cookie in options_response.cookies:
+                        session.cookies.set(cookie.name, cookie.value)
+                except Exception as e:
+                    logger.debug(f"预检请求失败: {e}，继续主请求")
                 
-                logger.info(f"游戏{game_name}刷新成功，状态码: {response.status_code}")
+                # 2. 发送主GET请求模拟网页刷新
+                response = session.get(url, headers=session.headers, timeout=30, allow_redirects=True)
                 
-                # 从cookie中获取新token
-                if 'token' in session.cookies:
-                    cookie_token = session.cookies['token']
-                    if cookie_token and cookie_token != self.current_token:
-                        logger.info(f"发现新token，游戏: {game_name}")
-                        return True, cookie_token
+                logger.info(f"游戏{game_name}刷新状态码: {response.status_code}")
                 
-                # 检查响应内容是否表明需要重新登录
-                if 'login' in response.text.lower() or '登录' in response.text:
-                    logger.warning(f"游戏{game_name}响应中包含登录提示，可能需要重新认证")
+                # 详细记录响应信息用于调试
+                logger.debug(f"响应头: {dict(response.headers)}")
+                logger.debug(f"响应cookies: {dict(response.cookies)}")
                 
-                return True, None
+                # 检查是否有新token
+                new_token = None
+                
+                # 1. 从响应cookies中获取token
+                if 'token' in response.cookies:
+                    new_token = response.cookies['token']
+                # 2. 从响应头中获取token
+                elif 'Authorization' in response.headers:
+                    auth_header = response.headers['Authorization']
+                    if auth_header.startswith('Bearer '):
+                        new_token = auth_header[7:]
+                # 3. 从响应头的X-Token中获取
+                elif 'X-Token' in response.headers:
+                    new_token = response.headers['X-Token']
+                
+                # 如果找到新token且有效，返回
+                if new_token and new_token != self.current_token and len(new_token) > 50:  # 简单验证token长度
+                    logger.info(f"发现新token，游戏: {game_name}, 长度: {len(new_token)}")
+                    return True, new_token
+                
+                # 特殊处理400错误
+                if response.status_code == 400:
+                    logger.warning(f"游戏{game_name}返回400错误，可能是参数问题，尝试添加额外参数")
+                    # 添加一些常见的查询参数
+                    params = {'_t': int(time.time()), 'refresh': 'true'}
+                    try:
+                        response = session.get(url, headers=session.headers, params=params, timeout=30)
+                        logger.info(f"带参数的刷新请求状态码: {response.status_code}")
+                        if response.status_code == 200:
+                            return True, new_token
+                    except Exception as e:
+                        logger.error(f"带参数刷新失败: {e}")
+                
+                # 检查响应是否表示成功
+                if 200 <= response.status_code < 300:
+                    # 即使没有新token，也视为成功
+                    logger.info(f"游戏{game_name}刷新成功")
+                    return True, None
+                
+                # 特殊处理认证错误
+                if response.status_code in [401, 403]:
+                    logger.warning(f"游戏{game_name}返回认证错误({response.status_code})，token可能已过期")
+                    # 尝试清除cookie后再次请求
+                    try:
+                        session.cookies.clear()
+                        if self.current_token:
+                            session.cookies.set('token', self.current_token)
+                        response = session.get(url, headers=session.headers, timeout=30)
+                        logger.info(f"清除cookie后重试状态码: {response.status_code}")
+                        return response.status_code == 200, None
+                    except Exception as e:
+                        logger.error(f"清除cookie后重试失败: {e}")
+                
             except requests.Timeout:
                 logger.error(f"刷新游戏{game_name}超时 (尝试 {attempt + 1}/{max_retries})")
             except requests.ConnectionError:
                 logger.error(f"刷新游戏{game_name}连接错误 (尝试 {attempt + 1}/{max_retries})")
+                # 连接错误时重置session
+                session = requests.Session()
             except requests.HTTPError as e:
                 logger.error(f"刷新游戏{game_name}HTTP错误 (尝试 {attempt + 1}/{max_retries}): {e}")
-                # 对于401/403错误，可能是token过期，立即返回
-                if response.status_code in [401, 403]:
-                    logger.warning(f"游戏{game_name}返回认证错误，token可能已过期")
-                    break
             except Exception as e:
                 logger.error(f"刷新游戏{game_name}失败 (尝试 {attempt + 1}/{max_retries}): {e}")
+                import traceback
+                logger.debug(f"异常堆栈: {traceback.format_exc()}")
             
-            # 如果不是最后一次尝试，等待一段时间后重试
+            # 指数退避策略
             if attempt < max_retries - 1:
-                delay = base_delay * (attempt + 1)  # 指数退避
-                logger.info(f"等待 {delay} 秒后重试游戏 {game_name}")
-                await asyncio.sleep(delay)
+                delay = base_delay * (2 ** attempt)  # 指数增长
+                jitter = random.uniform(0, 1)  # 添加随机抖动避免同步请求
+                actual_delay = delay + jitter
+                logger.info(f"等待 {actual_delay:.2f} 秒后重试游戏 {game_name}")
+                await asyncio.sleep(actual_delay)
         
         return False, None
     
     async def _refresh_all_games(self):
-        """刷新所有游戏的网页并更新token，带增强的错误处理"""
+        """刷新所有游戏的网页并更新token，带增强的错误处理和浏览器模拟"""
         logger.info(f"开始刷新所有游戏网页，共{len(self.game_configs)}个游戏")
         
-        # 使用同一个session来保存cookie和token
-        session = requests.Session()
-        new_token = None
-        success_count = 0
-        failure_count = 0
+        # 导入所需模块
+        import random
+        from urllib.parse import urlparse
+        import time
+        
+        # 跟踪是否有成功刷新
+        any_success = False
+        final_token = None
         
         # 检查是否有游戏配置
         if not self.game_configs:
             logger.warning("没有找到游戏配置，跳过刷新")
-            return None
+            return {"success": False, "message": "没有找到游戏配置"}
         
-        for game_name, config in self.game_configs.items():
+        # 对游戏配置进行随机排序，避免总是从同一个游戏开始
+        sorted_games = sorted(self.game_configs.items(), key=lambda x: random.random())
+        
+        for game_name, config in sorted_games:
             url = config.get("URL")
             if not url:
                 logger.warning(f"游戏 {game_name} 没有配置URL，跳过刷新")
-                failure_count += 1
                 continue
+            
+            # 为每个游戏创建独立的session，更接近真实浏览器行为
+            session = requests.Session()
+            logger.info(f"开始刷新游戏: {game_name}，URL: {url}")
+            
+            try:
+                # 使用新的浏览器模拟刷新方法
+                success, game_token = await self._simulate_browser_refresh(game_name, url, session)
+                
+                if success:
+                    any_success = True
+                    logger.info(f"游戏 {game_name} 刷新成功")
+                    
+                    # 如果获取到新token，优先使用
+                    if game_token:
+                        logger.info(f"从游戏 {game_name} 获取到新token")
+                        final_token = game_token
+                        # 立即保存新token
+                        self.current_token = final_token
+                        self._save_token(final_token)
+                        break  # 获取到token后可以提前退出
+                else:
+                    logger.warning(f"游戏 {game_name} 刷新失败")
+                
+                # 随机延迟，模拟真实用户行为
+                await asyncio.sleep(random.uniform(2, 5))
+                
+            except Exception as e:
+                logger.error(f"刷新游戏 {game_name} 时发生异常: {e}")
+                import traceback
+                logger.debug(f"异常堆栈: {traceback.format_exc()}")
+                
+                # 发生异常后短暂休眠
+                await asyncio.sleep(2)
             
             try:
                 # 刷新单个游戏，带重试
@@ -1154,36 +1275,55 @@ class MyPlugin(Star):
             display_name = "奖励"
             count = 1
             
-            # 检查是否有特殊格式的奖励配置
-            if 游戏名称 in self.game_configs and "发送的奖励" in self.game_configs[游戏名称]:
-                # 获取完整的奖励字符串，确保不做任何修改或分割
-                奖励字符串 = self.game_configs[游戏名称]["发送的奖励"]
-                print(f"从游戏配置获取的完整奖励字符串: '{奖励字符串}'")
-                try:
-                    # 直接使用完整的奖励字符串作为附件，不做任何处理或分割
-                    attachment = 奖励字符串
+            # 优先使用传入的奖励内容作为附件
+            if 奖励内容 and isinstance(奖励内容, str) and 奖励内容.strip():
+                # 检查奖励内容是否已经包含数量信息（格式如：xxx:数字）
+                if ":" in 奖励内容:
+                    attachment = 奖励内容  # 直接使用传入的完整奖励字符串
+                    logger.info(f"使用传入的完整奖励字符串作为附件: '{奖励内容}'")
                     
-                    # 解析显示名称和数量仅用于邮件内容显示
-                    # 注意：这里的解析只用于邮件正文显示，不影响实际发送的奖励ID
-                    if ":" in 奖励字符串:
-                        奖励_id, 数量 = 奖励字符串.split(":")
-                        count = int(数量)
+                    # 解析显示名称和数量用于邮件内容显示
+                    try:
+                        奖励_id, 数量_str = 奖励内容.split(":", 1)  # 只分割第一个冒号
+                        count = int(数量_str) if 数量_str.isdigit() else 1
+                        
                         # 改进的显示名称提取逻辑
-                        # 1. 尝试从奖励ID中提取中文字符作为显示名称
                         name_parts = 奖励_id.split(".")
-                        # 重置display_name以确保正确提取
                         display_name = "奖励"
                         for part in name_parts:
                             if any('\u4e00' <= char <= '\u9fff' for char in part):
                                 display_name = part
                                 break
-                        # 2. 如果没有找到中文字符，回退到使用最后一部分
                         if display_name == "奖励" and name_parts:
                             display_name = name_parts[-1]
-                except Exception as e:
-                    print(f"解析奖励字符串异常（仅影响显示，不影响实际发送的奖励）: {str(e)}")
-                    # 即使解析显示名称失败，仍然使用完整的奖励字符串作为附件
-                    attachment = 奖励字符串
+                    except Exception as e:
+                        logger.warning(f"解析奖励字符串异常（仅影响显示）: {str(e)}")
+                else:
+                    # 如果没有数量信息，使用传入的字符串并默认为1个
+                    attachment = 奖励内容
+                    logger.info(f"使用传入的奖励ID作为附件: '{奖励内容}'")
+            # 如果没有传入有效奖励内容，再尝试从游戏配置获取
+            elif 游戏名称 in self.game_configs and "发送的奖励" in self.game_configs[游戏名称]:
+                奖励字符串 = self.game_configs[游戏名称]["发送的奖励"]
+                logger.info(f"从游戏配置获取的奖励字符串: '{奖励字符串}'")
+                attachment = 奖励字符串
+                
+                # 解析显示名称和数量
+                if ":" in 奖励字符串:
+                    try:
+                        奖励_id, 数量_str = 奖励字符串.split(":", 1)
+                        count = int(数量_str) if 数量_str.isdigit() else 1
+                        
+                        name_parts = 奖励_id.split(".")
+                        display_name = "奖励"
+                        for part in name_parts:
+                            if any('\u4e00' <= char <= '\u9fff' for char in part):
+                                display_name = part
+                                break
+                        if display_name == "奖励" and name_parts:
+                            display_name = name_parts[-1]
+                    except Exception as e:
+                        logger.warning(f"解析游戏配置中的奖励字符串异常: {str(e)}")
             
             # 更新邮件正文，包含奖励信息
             if display_name and count:
@@ -1207,34 +1347,50 @@ class MyPlugin(Star):
             )
             result = email_service.quick_send(邮件标题, 邮件正文, 发送的用户, attachment=attachment)
             
-            # 检查是否是token相关错误
+            # 检查是否是token相关错误或400错误
             message = result.get('message', '')
-            if not result.get('success') and (message and ('token' in message.lower() or '认证' in message or '401' in message)):
-                print("检测到token过期或无效，尝试刷新token")
-                # 立即尝试刷新token
+            status_code = result.get('status_code')
+            
+            # 检测token错误或400/401/403错误
+            if not result.get('success') and (
+                (message and ('token' in message.lower() or '认证' in message or any(code in message for code in ['401', '403', '400'])))
+                or status_code in [400, 401, 403]
+            ):
+                logger.warning(f"检测到邮件发送错误: {message or status_code}，尝试刷新token")
+                
+                # 立即尝试刷新token（使用新的浏览器模拟方法）
                 refresh_result = await self._refresh_all_games()
                 
-                # 处理新的返回格式
-                if isinstance(refresh_result, dict):
-                    if refresh_result.get("success"):
-                        new_token = refresh_result.get("token")
-                        if new_token and self._is_token_valid(new_token):
-                            print(f"token刷新成功，新token: {new_token[:20]}...{new_token[-8:]}")
-                            # 使用新token重新发送邮件
+                # 如果刷新成功且有新token
+                if refresh_result and (refresh_result.get("success") or isinstance(refresh_result, str)):
+                    # 获取新token
+                    new_token = refresh_result.get("token") if isinstance(refresh_result, dict) else refresh_result
+                    
+                    if new_token and (isinstance(new_token, str) and len(new_token) > 50):
+                        logger.info(f"token刷新成功，新token长度: {len(new_token)}")
+                        
+                        # 使用新token创建新的邮件服务实例并重新发送
+                        logger.info("使用新token重新尝试发送邮件")
+                        new_email_service = EmailService(
+                            auth_token=new_token,
+                            project_id=项目ID,
+                            max_retries=2
+                        )
+                        # 重新发送邮件
+                        retry_result = new_email_service.quick_send(邮件标题, 邮件正文, 发送的用户, attachment=attachment)
+                        
+                        if retry_result.get('success'):
+                            logger.info("使用新token重新发送邮件成功")
+                            return True
+                        else:
+                            logger.error(f"使用新token重新发送邮件失败: {retry_result.get('message', '未知错误')}")
+                            self._log_email_failure(发送的用户, 奖励内容, "使用新token重试失败: " + retry_result.get('message', '未知错误'))
                     else:
-                        logger.error(f"token刷新失败: {refresh_result.get('message', '未知错误')}")
-                        # 记录失败信息
-                        self._log_email_failure(发送的用户, 奖励内容, "Token刷新失败: " + refresh_result.get('message', '未知错误'))
-                        return False
-                # 向后兼容旧的返回格式（直接返回token字符串）
-                elif refresh_result and self._is_token_valid(refresh_result):
-                    new_token = refresh_result
-                    print(f"token刷新成功（旧格式），新token: {new_token[:20]}...{new_token[-8:]}")
-                    # 使用新token重新发送邮件
+                        logger.warning("刷新后获取的token无效或为空")
                 else:
-                    logger.error(f"token刷新失败: 返回值无效或为None")
-                    # 记录失败信息
-                    self._log_email_failure(发送的用户, 奖励内容, "Token刷新失败: 返回值无效")
+                    logger.error(f"token刷新失败或无返回值")
+                    self._log_email_failure(发送的用户, 奖励内容, "Token刷新失败或无返回值")
+                    # 使用新token重新发送邮件
                     return False
             
             # 检查结果是否成功
@@ -1662,7 +1818,7 @@ class MyPlugin(Star):
                     yield msg
                 return
             # 读取当前抽奖数据
-            抽奖数据=Json.读取Json字典("抽奖数据存储.json")
+            抽奖数据=JsonHandler.读取Json字典("抽奖数据存储.json")
             当前时间=datetime.datetime.now()
             开奖截止时间=当前时间+datetime.timedelta(minutes=开奖时间)
             抽奖ID=str(int(当前时间.timestamp()))
@@ -1706,7 +1862,7 @@ class MyPlugin(Star):
             logger.error(f"定时任务异常: {e}")
 
     async def 开奖(self, 抽奖ID,event:AstrMessageEvent):
-        抽奖数据=Json.读取Json字典("抽奖数据存储.json")
+        抽奖数据=JsonHandler.读取Json字典("抽奖数据存储.json")
         if 抽奖ID not in 抽奖数据:
             return
         数据=抽奖数据[抽奖ID]
@@ -1827,23 +1983,33 @@ class MyPlugin(Star):
                     logger.error(f"备用方案也失败: {backup_error}")
 
         # 安全获取项目ID和奖励字符串
-        项目ID = self.game_configs.get(数据.get('游戏名称', ''), {}).get('项目ID', '')
+                    项目ID = self.game_configs.get(数据.get('游戏名称', ''), {}).get('项目ID', '')
 
-        # 安全获取奖励字符串，避免'发送的奖励'键不存在的错误
-        游戏名称 = 数据.get('游戏名称', '')
-        
-        奖励基础字符串 = ""
-        if hasattr(self, '抽奖数据列表') and isinstance(self.抽奖数据列表, dict):
-            游戏配置 = self.抽奖数据列表.get(游戏名称, {})
-            奖励基础字符串 = 游戏配置.get('发送的奖励', '')
-        奖励数量_str = str(数据.get('奖励数量', 1))
-        奖励字符串 = f"{奖励基础字符串}:{奖励数量_str}" if 奖励基础字符串 else ""
+                    # 安全获取奖励字符串，避免'发送的奖励'键不存在的错误
+                    游戏名称 = 数据.get('游戏名称', '')
+                    奖励数量 = data.get('奖励数量', 1)
+                    
+                    # 优化奖励字符串构建：优先从游戏配置获取基础奖励字符串
+                    奖励基础字符串 = ""
+                    # 首先从game_configs获取奖励配置
+                    if 游戏名称 in self.game_configs:
+                        奖励基础字符串 = self.game_configs[游戏名称].get('发送的奖励', '')
+                    
+                    # 如果game_configs中没有，再尝试从抽奖数据列表获取
+                    if not 奖励基础字符串 and hasattr(self, '抽奖数据列表') and isinstance(self.抽奖数据列表, dict):
+                        游戏配置 = self.抽奖数据列表.get(游戏名称, {})
+                        奖励基础字符串 = 游戏配置.get('发送的奖励', '')
+                    
+                    # 正确构建奖励字符串，确保格式为"$p_95jd.lobby_resource.魂晶.root:999"（根据实际数量）
+                    奖励字符串 = f"{奖励基础字符串}:{奖励数量}" if 奖励基础字符串 else ""
 
         for 获奖者ID in 获奖者:
             #发送奖励邮件
-            玩家数据 = Json.读取Json字典("玩家绑定id数据存储.json")
-            发送的用户 = Json.获取值(玩家数据, 获奖者ID)
+            # 修复Json类调用错误，使用正确的JsonHandler类
+            玩家数据 = JsonHandler.读取Json字典("玩家绑定id数据存储.json")
+            发送的用户 = JsonHandler.获取值(玩家数据, 获奖者ID)
             if not 发送的用户:
+                logger.warning(f"未找到获奖者{获奖者ID}的绑定信息，跳过发送奖励")
                 continue
             
             发送的奖励 = {"items": []}
@@ -1873,11 +2039,13 @@ class MyPlugin(Star):
             邮件正文 = f"恭喜您在{游戏名称}的抽奖活动中获奖！"
             # 检查send_personal_reward_email是否返回异步生成器
             try:
+                logger.info(f"准备发送邮件给用户 {发送的用户}，奖励: {奖励字符串}")
                 result = self.send_personal_reward_email(self.auth_token, 项目ID, 奖励字符串, 发送的用户, 邮件标题, 邮件正文, 数据.get('游戏名称', '未知游戏'))
                 # 检查返回值是否是协程或异步生成器
                 if hasattr(result, '__await__'):
                     # 是协程，直接await
                     await result
+                    logger.info(f"邮件发送完成给用户 {发送的用户}")
                 elif hasattr(result, '__aiter__'):
                     # 是异步生成器，使用async for
                     async for _ in result:
@@ -1906,7 +2074,7 @@ class MyPlugin(Star):
             return
         
         游戏名称 = parts[1]
-        抽奖数据 = Json.读取Json字典("抽奖数据存储.json")
+        抽奖数据 = JsonHandler.读取Json字典("抽奖数据存储.json")
         
         # 筛选该游戏的所有抽奖
         游戏抽奖列表 = []
@@ -1941,7 +2109,7 @@ class MyPlugin(Star):
         """处理查看已发起的抽奖，如果不指定就是查看所有的抽奖,格式为：查看抽奖 抽奖ID"""
         message_str = event.message_str.strip()
         parts = message_str.split(" ")
-        抽奖数据=Json.读取Json字典("抽奖数据存储.json")
+        抽奖数据=JsonHandler.读取Json字典("抽奖数据存储.json")
         if len(parts)==1:
             #查看所有抽奖
             if len(抽奖数据)==0:
@@ -1995,9 +2163,17 @@ class MyPlugin(Star):
                 yield msg
             return
         抽奖ID=parts[1]
-        抽奖数据=Json.读取Json字典("抽奖数据存储.json")
+        
+        # 检查是否已绑定ID
+        玩家绑定数据 = JsonHandler.读取Json字典("玩家绑定id数据存储.json")
+        if author_id not in 玩家绑定数据 or not 玩家绑定数据[author_id].strip():
+            async for msg in self.发送消息(event, "❌ 参与失败 ❌\n\n参与抽奖必须已经绑定ID\n请先完成ID绑定后再参与抽奖\n\n绑定ID格式：绑定ID 游戏名称 玩家ID"):
+                yield msg
+            return
+            
+        抽奖数据=JsonHandler.读取Json字典("抽奖数据存储.json")
         if 抽奖ID not in 抽奖数据:
-            async for msg in self.发送消息(event, f"❌ 错误提示 ❌\n\n未找到ID为{抽奖ID}的抽奖活动\n请检查抽奖ID是否正确"):
+            async for msg in self.发送消息(event, f"❌ 错误提示 ❌\n\n未找到ID为{抽奖ID}的抽奖活动\n请检查抽奖ID是否正确\n\n如果确认抽奖ID正确，请联系管理员处理"):
                         yield msg
             return
         数据=抽奖数据[抽奖ID]
