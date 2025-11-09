@@ -1686,9 +1686,9 @@ class MyPlugin(Star):
                 yield msg
 
             # 创建并启动一个异步任务来等待开奖
-            asyncio.create_task(self.等待开奖(开奖时间, 抽奖ID))
+            asyncio.create_task(self.等待开奖(开奖时间, 抽奖ID,event))
     
-    async def 等待开奖(self,开奖时间, 抽奖ID):
+    async def 等待开奖(self,开奖时间, 抽奖ID,event:AstrMessageEvent):
         """等待开奖"""
         logger.info("开始等待开奖")
         try:
@@ -1696,7 +1696,7 @@ class MyPlugin(Star):
             await asyncio.sleep(60 * 开奖时间)
             try:
                 # 由于开奖函数是异步生成器，需要使用async for循环来迭代结果
-                async for _ in self.开奖(抽奖ID):
+                async for _ in self.开奖(抽奖ID,event):
                     pass
             except Exception as e:
                 logger.error(f"定时开奖出错: {e}")
@@ -1705,7 +1705,7 @@ class MyPlugin(Star):
         except Exception as e:
             logger.error(f"定时任务异常: {e}")
 
-    async def 开奖(self, 抽奖ID):
+    async def 开奖(self, 抽奖ID,event:AstrMessageEvent):
         抽奖数据=Json.读取Json字典("抽奖数据存储.json")
         if 抽奖ID not in 抽奖数据:
             return
@@ -1722,7 +1722,6 @@ class MyPlugin(Star):
             # 发送未有人参与的消息
             群聊ID=数据.get('群聊ID')
             if 群聊ID:
-                event = AstrMessageEvent()
                 event.set_group_id(群聊ID)
                 游戏名称 = 数据.get('游戏名称', '未知游戏')
                 消息内容=f"📢 抽奖结果通知 📢\n\n✨ 抽奖ID：{抽奖ID}\n🎮 游戏名称：{游戏名称}\n\n很遗憾，本次抽奖活动无人参与，活动已自动取消。"
@@ -1750,7 +1749,13 @@ class MyPlugin(Star):
         #假设有一个群聊ID存储在数据中
         群聊ID=数据.get('群聊ID')
         if 群聊ID:
-            event = AstrMessageEvent()
+            # 为AstrMessageEvent构造函数提供所需的参数
+            event = AstrMessageEvent(
+                message_str='',
+                message_obj=None,
+                platform_meta={},
+                session_id=f'lottery_{抽奖ID}'
+            )
             event.set_group_id(群聊ID)
             async for msg in self.发送消息(event, 消息内容):
                 yield msg
