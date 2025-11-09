@@ -1666,7 +1666,7 @@ class MyPlugin(Star):
             当前时间=datetime.datetime.now()
             开奖截止时间=当前时间+datetime.timedelta(hours=开奖时间)
             抽奖ID=str(int(当前时间.timestamp()))
-            抽奖ID="{游戏名称}_{抽奖ID}"
+            抽奖ID=f"{游戏名称}_{抽奖ID}"
             抽奖数据[抽奖ID]={
                 "游戏名称":游戏名称,
                 "奖励名称":奖励名称,
@@ -1677,25 +1677,26 @@ class MyPlugin(Star):
                 "参与者":[],
                 "群聊ID": event.get_group_id()
             }
-            Json.添加或更新("抽奖数据存储.json","{游戏名称}_{抽奖ID}",抽奖数据)
+            Json.添加或更新("抽奖数据存储.json",抽奖ID,抽奖数据)
 
-            async for msg in self.发送消息(event, f"抽奖发起成功！抽奖ID：{游戏名称}_{抽奖ID}，游戏名称：{游戏名称}，奖励名称：{奖励名称}，获奖人数：{抽奖人数}，截止时间：{开奖截止时间.strftime('%Y-%m-%d %H:%M:%S')}。请使用“参与抽奖 {抽奖ID}”命令参与抽奖。"):
+            async for msg in self.发送消息(event, f"抽奖发起成功！抽奖ID：{抽奖ID}，游戏名称：{游戏名称}，奖励名称：{奖励名称}，获奖人数：{抽奖人数}，截止时间：{开奖截止时间.strftime('%Y-%m-%d %H:%M:%S')}。请使用“参与抽奖 {抽奖ID}”命令参与抽奖。"):
                 yield msg
-            等待开奖(self,开奖时间)
 
-        async def 等待开奖(self,开奖时间):
+            # 创建并启动一个异步任务来等待开奖
+            asyncio.create_task(self.等待开奖(开奖时间, 抽奖ID))
+            
+        async def 等待开奖(self,开奖时间, 抽奖ID):
             """等待开奖"""
             logger.info("开始等待开奖")
             try:
-                while True:
-                    # 每分钟执行一次检查
-                    await asyncio.sleep(3600*开奖时间)
-                    try:
-                        开奖(self, 抽奖ID)
-                    except Exception as e:
-                        logger.error(f"定时开奖出错: {e}")
-                    except asyncio.CancelledError:
-                        logger.info("开奖任务已取消")
+                # 等待指定的开奖时间
+                await asyncio.sleep(3600 * 开奖时间)
+                try:
+                    await self.开奖(抽奖ID)
+                except Exception as e:
+                    logger.error(f"定时开奖出错: {e}")
+                except asyncio.CancelledError:
+                    logger.info("开奖任务已取消")
             except Exception as e:
                         logger.error(f"定时任务异常: {e}")
 
