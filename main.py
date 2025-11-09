@@ -1695,7 +1695,9 @@ class MyPlugin(Star):
             # 等待指定的开奖时间（分钟转换为秒）
             await asyncio.sleep(60 * 开奖时间)
             try:
-                await self.开奖(抽奖ID)
+                # 由于开奖函数是异步生成器，需要使用async for循环来迭代结果
+                async for _ in self.开奖(抽奖ID):
+                    pass
             except Exception as e:
                 logger.error(f"定时开奖出错: {e}")
             except asyncio.CancelledError:
@@ -1795,15 +1797,15 @@ class MyPlugin(Star):
         with open(文件路径, 'w', encoding='utf-8') as f:
             json.dump(抽奖数据, f, ensure_ascii=False, indent=2)
 
-    @filter.command("查询游戏抽奖")
+    @filter.command("查看游戏抽奖")
     async def 查询游戏抽奖(self, event: AstrMessageEvent):
-        """处理查询指定游戏的抽奖活动，格式为：查询游戏抽奖 游戏名称"""
+        """处理查看指定游戏的抽奖活动，格式为：查看游戏抽奖 游戏名称"""
         message_str = event.message_str.strip()
         parts = message_str.split(" ")
         
         # 检查参数格式
         if len(parts) != 2:
-            async for msg in self.发送消息(event, "📝 使用说明 📝\n\n查询指定游戏的抽奖活动：查询游戏抽奖 游戏名称"):
+            async for msg in self.发送消息(event, "📝 使用说明 📝\n\n查看指定游戏的抽奖活动：查看游戏抽奖 游戏名称"):
                 yield msg
             return
         
