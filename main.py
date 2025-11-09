@@ -1269,12 +1269,17 @@ class MyPlugin(Star):
             if 奖励内容 and isinstance(奖励内容, str) and 奖励内容.strip():
                 # 检查奖励内容是否已经包含数量信息（格式如：xxx:数字）
                 if ":" in 奖励内容:
-                    attachment = 奖励内容  # 直接使用传入的完整奖励字符串
+                    # 确保奖励字符串有正确的$前缀
+                    if not 奖励内容.startswith("$"):
+                        奖励内容 = "$" + 奖励内容
+                    attachment = 奖励内容  # 使用格式化后的完整奖励字符串
                     logger.info(f"使用传入的完整奖励字符串作为附件: '{奖励内容}'")
                     
                     # 解析显示名称和数量用于邮件内容显示
                     try:
                         奖励_id, 数量_str = 奖励内容.split(":", 1)  # 只分割第一个冒号
+                        # 移除可能的$前缀以便正确解析
+                        奖励_id = 奖励_id.lstrip("$")
                         count = int(数量_str) if 数量_str.isdigit() else 1
                         
                         # 改进的显示名称提取逻辑
@@ -1289,12 +1294,17 @@ class MyPlugin(Star):
                     except Exception as e:
                         logger.warning(f"解析奖励字符串异常（仅影响显示）: {str(e)}")
                 else:
-                    # 如果没有数量信息，使用传入的字符串并默认为1个
+                    # 如果没有数量信息，确保有$前缀并默认为1个
+                    if not 奖励内容.startswith("$"):
+                        奖励内容 = "$" + 奖励内容
                     attachment = 奖励内容
                     logger.info(f"使用传入的奖励ID作为附件: '{奖励内容}'")
             # 如果没有传入有效奖励内容，再尝试从游戏配置获取
             elif 游戏名称 in self.game_configs and "发送的奖励" in self.game_configs[游戏名称]:
                 奖励字符串 = self.game_configs[游戏名称]["发送的奖励"]
+                # 确保奖励字符串有正确的$前缀
+                if not 奖励字符串.startswith("$"):
+                    奖励字符串 = "$" + 奖励字符串
                 logger.info(f"从游戏配置获取的奖励字符串: '{奖励字符串}'")
                 attachment = 奖励字符串
                 
