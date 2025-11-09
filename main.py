@@ -1798,8 +1798,18 @@ class MyPlugin(Star):
                 except Exception as backup_error:
                     logger.error(f"备用方案也失败: {backup_error}")
 
-        项目ID = self.game_configs[数据['游戏名称']]['项目ID']
-        奖励字符串 = self.抽奖数据列表[数据['游戏名称']]['发送的奖励']+f":{数据['奖励数量']}"
+        # 安全获取项目ID和奖励字符串
+        项目ID = self.game_configs.get(数据.get('游戏名称', ''), {}).get('项目ID', '')
+
+        # 安全获取奖励字符串，避免'发送的奖励'键不存在的错误
+        游戏名称 = 数据.get('游戏名称', '')
+        
+        奖励基础字符串 = ""
+        if hasattr(self, '抽奖数据列表') and isinstance(self.抽奖数据列表, dict):
+            游戏配置 = self.抽奖数据列表.get(游戏名称, {})
+            奖励基础字符串 = 游戏配置.get('发送的奖励', '')
+        奖励数量_str = str(数据.get('奖励数量', 1))
+        奖励字符串 = f"{奖励基础字符串}:{奖励数量_str}" if 奖励基础字符串 else ""
 
         for 获奖者ID in 获奖者:
             #发送奖励邮件
