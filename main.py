@@ -115,13 +115,14 @@ Json = JsonHandler
 class EmailService:
     """邮件发送服务类（基于C#代码实现）"""
     
-    def __init__(self, auth_token, project_id="p_95jd"):
+    def __init__(self, auth_token, project_id="p_95jd", max_retries=2):
         """
         初始化邮件服务
         
         Args:
             auth_token (str): 认证令牌
             project_id (str): 项目ID，默认值为"p_95jd"
+            max_retries (int): 重试次数，默认值为2
         """
         self.auth_token = auth_token
         self.project_id = project_id
@@ -129,7 +130,7 @@ class EmailService:
         self.send_email_url = "https://adminapi-pd.spark.xd.com/api/v1/table/row"
         self.table_id = "firm0_app_email_manager"
         self.session = requests.Session()
-        self.max_retries = 2  # 遇到401时的重试次数
+        self.max_retries = max_retries  # 设置重试次数
         # 设置默认请求头
         self._update_auth_headers(auth_token)
     
@@ -971,7 +972,11 @@ class MyPlugin(Star):
             logger.info(f"使用存储的token发送邮件，token长度: {len(token_to_use)} 字符")
             
             # 创建邮件服务并发送邮件（增加重试设置）
-            email_service = EmailService(token_to_use, 项目ID, max_retries=3)
+            email_service = EmailService(
+                auth_token=token_to_use,
+                project_id=项目ID,
+                max_retries=3
+            )
             result = email_service.quick_send(邮件标题, 邮件正文, 发送的用户, attachment=attachment)
             
             # 检查是否是token相关错误
