@@ -1626,7 +1626,7 @@ class MyPlugin(Star):
             async for msg in self.发送消息(event, f"刷新token时出错: {str(e)}"):
                 yield msg
 
-    filter.command("发起抽奖")
+    @filter.command("发起抽奖")
     async def 发起抽奖(self, event: AstrMessageEvent):
         """处理发起抽奖功能,需要管理员权限并且在群聊中使用，使用格式：发起抽奖 游戏名称 奖励名称 奖励数量 抽奖人数 多久后开奖(小时)"""
         message_str = event.message_str.strip()
@@ -1760,9 +1760,9 @@ class MyPlugin(Star):
             del 抽奖数据[抽奖ID]
             Json.添加或更新("抽奖数据存储.json","{游戏名称}_{抽奖ID}",抽奖数据)
 
-    filter.command("查看抽奖")
-    """处理查看已发起的抽奖，如果不指定就是查看所有的抽奖,格式为：查看抽奖 抽奖ID"""
+    @filter.command("查看抽奖")
     async def 查看抽奖(self, event: AstrMessageEvent):
+        """处理查看已发起的抽奖，如果不指定就是查看所有的抽奖,格式为：查看抽奖 抽奖ID"""
         message_str = event.message_str.strip()
         parts = message_str.split(" ")
         抽奖数据=Json.读取Json字典("抽奖数据存储.json")
@@ -1792,9 +1792,9 @@ class MyPlugin(Star):
             async for msg in self.发送消息(event, "请使用正确的格式：查看抽奖 或 查看抽奖 抽奖ID"):
                 yield msg
     
-    filter.command("参与抽奖")
-    """参与已发起的某个抽奖，格式为：参与抽奖 抽奖ID"""
+    @filter.command("参与抽奖")
     async def 参与抽奖(self, event: AstrMessageEvent):
+        """参与已发起的某个抽奖，格式为：参与抽奖 抽奖ID"""
         message_str = event.message_str.strip()
         author_id = event.get_sender_id()
         parts = message_str.split(" ")
