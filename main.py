@@ -8,7 +8,7 @@ import requests
 import asyncio
 from pathlib import Path
 import time
-
+import random
 # JSON处理模块
 class JsonHandler:
     @staticmethod
@@ -722,7 +722,29 @@ class MyPlugin(Star):
                 "URL": "https://developer.spark.xd.com/dashboard/p_95jd/firm0_lv_2_4_1"
             }
         }
-        
+        self.抽奖数据列表 = {
+            "捉妖:钟馗": {
+                "魂晶": "$p_95jd.lobby_resource.魂晶.root",
+                "奖品2": "奖励B",
+                "奖品3": "奖励C"
+            },
+            "游戏2": {
+                "奖品1": "奖励D",
+                "奖品2": "奖励E",
+                "奖品3": "奖励F"
+            },
+            "游戏3": {
+                "奖品1": "奖励G",
+                "奖品2": "奖励H",
+                "奖品3": "奖励I"
+            },
+            "游戏4": {
+                "奖品1": "奖励J",
+                "奖品2": "奖励K",
+                "奖品3": "奖励L"
+            }
+           
+        }
         # 加载current_token（可能与auth_token不同，用于实际请求）
         self._load_token()
 
@@ -1546,6 +1568,22 @@ class MyPlugin(Star):
         else:
             async for msg in self.发送消息(event, "请输入正确的格式：绑定ID xxx"):
                 yield msg
+    
+    @filter.command("查看ID")
+    async def handle_view_id(self, event: AstrMessageEvent):
+        """查看已绑定的ID"""
+        author_id = event.get_sender_id()
+        
+        # 从存储文件中读取绑定的ID
+        玩家数据 = Json.读取Json字典("玩家绑定id数据存储.json")
+        绑定的_id = Json.获取值(玩家数据, author_id)
+        
+        if 绑定的_id:
+            async for msg in self.发送消息(event, f"您当前绑定的游戏ID是：{绑定的_id}"):
+                yield msg
+        else:
+            async for msg in self.发送消息(event, "您还未绑定游戏ID，请使用'绑定ID xxx'命令进行绑定"):
+                yield msg
 
     async def terminate(self):
         """插件销毁方法"""
@@ -1587,3 +1625,195 @@ class MyPlugin(Star):
             logger.error(f"手动刷新token失败: {e}")
             async for msg in self.发送消息(event, f"刷新token时出错: {str(e)}"):
                 yield msg
+
+    filter.command("发起抽奖")
+    async def 发起抽奖(self, event: AstrMessageEvent):
+        """处理发起抽奖功能,需要管理员权限并且在群聊中使用，使用格式：发起抽奖 游戏名称 奖励名称 奖励数量 抽奖人数 多久后开奖(小时)"""
+        message_str = event.message_str.strip()
+        author_id = event.get_sender_id()
+        # 检查是否在群聊中使用
+        if(event.is_private_chat()==True):
+            async for msg in self.发送消息(event, "抽奖命令请在群聊中使用。"):
+                yield msg
+            return
+        # 检查是否为管理员
+        if(event.is_admin()!="admin"):
+            async for msg in self.发送消息(event, "您没有权限使用此命令。"):
+                yield msg
+            return
+        # 解析抽奖名称
+        parts = message_str.split(" ")
+        if len(parts) != 6:
+            async for msg in self.发送消息(event, "请使用正确的格式：发起抽奖 游戏名称 奖励名称 奖励数量 获奖人数 多久后开奖(小时)"):
+                yield msg
+            return
+        else:
+            游戏名称 = parts[1]
+            奖励名称 = parts[2]
+            奖励数量 = parts[3]
+            抽奖人数 = parts[4]
+            开奖时间 = parts[5]
+            user_name = event.get_sender_name()
+            try:
+                抽奖人数=int(抽奖人数)
+                开奖时间=int(开奖时间)
+            except:
+                async for msg in self.发送消息(event, "抽奖人数和开奖时间必须为整数，请检查后重新输入。"):
+                    yield msg
+                return
+            # 读取当前抽奖数据
+            抽奖数据=Json.读取Json字典("抽奖数据存储.json")
+            当前时间=datetime.datetime.now()
+            开奖截止时间=当前时间+datetime.timedelta(hours=开奖时间)
+            抽奖ID=str(int(当前时间.timestamp()))
+            抽奖ID="{游戏名称}_{抽奖ID}"
+            抽奖数据[抽奖ID]={
+                "游戏名称":游戏名称,
+                "奖励名称":奖励名称,
+                "奖励数量":奖励数量,
+                "抽奖人数":抽奖人数,
+                "发起人ID":user_name,
+                "截止时间":开奖截止时间.strftime("%Y-%m-%d %H:%M:%S"),
+                "参与者":[],
+                "群聊ID": event.get_group_id()
+            }
+            Json.添加或更新("抽奖数据存储.json","{游戏名称}_{抽奖ID}",抽奖数据)
+
+            async for msg in self.发送消息(event, f"抽奖发起成功！抽奖ID：{游戏名称}_{抽奖ID}，游戏名称：{游戏名称}，奖励名称：{奖励名称}，获奖人数：{抽奖人数}，截止时间：{开奖截止时间.strftime('%Y-%m-%d %H:%M:%S')}。请使用“参与抽奖 {抽奖ID}”命令参与抽奖。"):
+                yield msg
+            等待开奖(self,开奖时间)
+
+        async def 等待开奖(self,开奖时间):
+            """等待开奖"""
+            logger.info("开始等待开奖")
+            try:
+                while True:
+                    # 每分钟执行一次检查
+                    await asyncio.sleep(3600*开奖时间)
+                    try:
+                        开奖(self, 抽奖ID)
+                    except Exception as e:
+                        logger.error(f"定时开奖出错: {e}")
+                    except asyncio.CancelledError:
+                        logger.info("开奖任务已取消")
+            except Exception as e:
+                        logger.error(f"定时任务异常: {e}")
+
+        async def 开奖(self, 抽奖ID):
+            抽奖数据=Json.读取Json字典("抽奖数据存储.json")
+            if 抽奖ID not in 抽奖数据:
+                return
+            数据=抽奖数据[抽奖ID]
+            参与者列表=数据['参与者']
+            if len(参与者列表)==0:
+                return
+            获奖人数=min(数据['抽奖人数'],len(参与者列表))
+
+            获奖者=random.sample(参与者列表,获奖人数)
+
+            #发送获奖消息
+            消息内容=f"抽奖ID：{抽奖ID}的抽奖活动已结束！\n游戏名称：{数据['游戏名称']}\n奖励名称：{数据['奖励名称']}\n奖励数量：{数据['奖励数量']}\n获奖人数：{获奖人数}\n获奖者名单：{', '.join(获奖者)}"
+            #假设有一个群聊ID存储在数据中
+            群聊ID=数据.get('群聊ID')
+            if 群聊ID:
+                event = AstrMessageEvent()
+                event.set_group_id(群聊ID)
+                async for msg in self.发送消息(event, 消息内容):
+                    yield msg
+
+            项目ID = self.game_configs[数据['游戏名称']]['项目ID']
+            奖励字符串 = self.抽奖数据列表[数据['游戏名称']]['发送的奖励']+f":{数据['奖励数量']}"
+
+            for 获奖者ID in 获奖者:
+                #发送奖励邮件
+                玩家数据 = Json.读取Json字典("玩家绑定id数据存储.json")
+                发送的用户 = Json.获取值(玩家数据, 获奖者ID)
+                if not 发送的用户:
+                    continue
+                
+                发送的奖励 = {"items": []}
+                if 奖励字符串:
+                    try:
+                        # 提取奖励ID和数量
+                        奖励_id, 数量 = 奖励字符串.split(":")
+                        数量 = int(数量)
+                        # 改进的显示名称提取逻辑
+                        # 1. 尝试从奖励ID中提取中文字符作为显示名称
+                        name_parts = 奖励_id.split(".")
+                        display_name = "奖励"
+                        for part in name_parts:
+                            if any('\u4e00' <= char <= '\u9fff' for char in part):
+                                display_name = part
+                                break
+                        # 2. 如果没有找到中文字符，回退到使用最后一部分
+                        if display_name == "奖励" and name_parts:
+                            display_name = name_parts[-1]
+                        发送的奖励["items"].append(f"{display_name}*{数量}")
+                    except:
+                        发送的奖励["items"] = ["抽奖奖励"]
+                else:
+                    发送的奖励["items"] = ["抽奖奖励"]
+                邮件标题 = "抽奖奖励"
+                邮件正文 = f"恭喜您在{数据['游戏名称']}的抽奖活动中获奖！"
+                await self.send_personal_reward_email(self.auth_token, 项目ID, 奖励字符串, 发送的用户, 邮件标题, 邮件正文, 数据['游戏名称'])
+            #删除抽奖数据
+            del 抽奖数据[抽奖ID]
+            Json.添加或更新("抽奖数据存储.json","{游戏名称}_{抽奖ID}",抽奖数据)
+
+    filter.command("查看抽奖")
+    """处理查看已发起的抽奖，如果不指定就是查看所有的抽奖,格式为：查看抽奖 抽奖ID"""
+    async def 查看抽奖(self, event: AstrMessageEvent):
+        message_str = event.message_str.strip()
+        parts = message_str.split(" ")
+        抽奖数据=Json.读取Json字典("抽奖数据存储.json")
+        if len(parts)==1:
+            #查看所有抽奖
+            if len(抽奖数据)==0:
+                async for msg in self.发送消息(event, "当前没有任何抽奖活动。"):
+                    yield msg
+                return
+            消息内容="当前抽奖活动列表：\n"
+            for 抽奖ID,数据 in 抽奖数据.items():
+                消息内容+=f"抽奖ID：{抽奖ID}，游戏名称：{数据['游戏名称']}，奖励名称：{数据['奖励名称']}，获奖人数：{数据['抽奖人数']}，截止时间：{数据['截止时间']}，参与人数：{len(数据['参与者'])}\n"
+            async for msg in self.发送消息(event, 消息内容):
+                yield msg
+        elif len(parts)==2:
+            #查看指定抽奖
+            抽奖ID=parts[1]
+            if 抽奖ID not in 抽奖数据:
+                async for msg in self.发送消息(event, f"未找到ID为{抽奖ID}的抽奖活动。"):
+                    yield msg
+                return
+            数据=抽奖数据[抽奖ID]
+            消息内容=f"抽奖ID：{抽奖ID}\n游戏名称：{数据['游戏名称']}\n奖励名称：{数据['奖励名称']}\n获奖人数：{数据['抽奖人数']}\n截止时间：{数据['截止时间']}\n参与人数：{len(数据['参与者'])}\n参与者列表：{', '.join(数据['参与者']) if 数据['参与者'] else '暂无参与者'}"
+            async for msg in self.发送消息(event, 消息内容):
+                yield msg
+        else:
+            async for msg in self.发送消息(event, "请使用正确的格式：查看抽奖 或 查看抽奖 抽奖ID"):
+                yield msg
+    
+    filter.command("参与抽奖")
+    """参与已发起的某个抽奖，格式为：参与抽奖 抽奖ID"""
+    async def 参与抽奖(self, event: AstrMessageEvent):
+        message_str = event.message_str.strip()
+        author_id = event.get_sender_id()
+        parts = message_str.split(" ")
+        if len(parts)!=2:
+            async for msg in self.发送消息(event, "请使用正确的格式：参与抽奖 抽奖ID"):
+                yield msg
+            return
+        抽奖ID=parts[1]
+        抽奖数据=Json.读取Json字典("抽奖数据存储.json")
+        if 抽奖ID not in 抽奖数据:
+            async for msg in self.发送消息(event, f"未找到ID为{抽奖ID}的抽奖活动。"):
+                yield msg
+            return
+        数据=抽奖数据[抽奖ID]
+        if author_id in 数据['参与者']:
+            async for msg in self.发送消息(event, "您已参与该抽奖，无需重复参与。"):
+                yield msg
+            return
+        数据['参与者'].append(author_id)
+        Json.添加或更新("抽奖数据存储.json",抽奖ID,抽奖数据)
+        async for msg in self.发送消息(event, f"您已成功参与抽奖ID为{抽奖ID}的抽奖活动，祝您好运！"):
+            yield msg
