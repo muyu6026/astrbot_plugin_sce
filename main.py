@@ -67,7 +67,7 @@ class JsonHandler:
     
     @staticmethod
     def 获取文件路径(文件名: str, 确保目录存在: bool = False) -> str:
-        """获取文件路径（已废弃，但为保持兼容性保留）"""
+        """获取文件路径（已废弃，不再使用）"""
         logger.warning("获取文件路径方法已废弃，请直接使用数据库存储")
         return ""
     
@@ -75,21 +75,8 @@ class JsonHandler:
     def 读取Json字典(文件名: str) -> dict:
         """读取JSON文件为字符串字典"""
         try:
-            文件路径 = JsonHandler.获取文件路径(文件名)
-            
-            if not os.path.exists(文件路径):
-                print(f"警告: 文件不存在: {文件路径}")
-                return {}
-            
-            with open(文件路径, 'r', encoding='utf-8') as f:
-                json内容 = f.read()
-                字典 = json.loads(json内容) if json内容 else {}
-                
-                if not isinstance(字典, dict):
-                    print(f"警告: JSON文件内容格式不正确: {文件路径}")
-                    return {}
-                
-                return 字典
+            # 直接从数据库读取数据
+            return JsonHandler.读取Json字典(文件名)
         except Exception as ex:
             print(f"错误: 读取JSON字典时发生错误 - {ex}")
             return {}
@@ -213,9 +200,10 @@ class JsonHandler:
                 if not results:
                     logger.info("尝试从JSON文件读取向量数据")
                     向量存储文件 = f"向量存储_{集合名称}.json"
-                    向量数据 = JsonHandler.读取Json字典(向量存储文件)
-                    
-                    for 数据ID, 项目 in 向量数据.items():
+            # 直接从数据库读取数据
+            向量数据 = JsonHandler.读取Json字典(向量存储文件)
+            
+            for 数据ID, 项目 in 向量数据.items():
                         向量 = 项目.get("向量", [])
                         if len(向量) != len(查询向量):
                             continue
@@ -229,8 +217,8 @@ class JsonHandler:
                         })
                 
                 # 排序并返回结果
-                results.sort(key=lambda x: x["distance"])
-                return results[:top_k]
+            results.sort(key=lambda x: x["distance"])
+            return results[:top_k]
         except Exception as e:
             logger.error(f"搜索相似向量失败: {e}")
             return []
@@ -285,9 +273,8 @@ class JsonHandler:
             }
             
             # 保存到文件
-            文件路径 = JsonHandler.获取文件路径(向量存储文件, True)
-            with open(文件路径, 'w', encoding='utf-8') as f:
-                json.dump(向量数据, f, ensure_ascii=False, indent=2)
+            # 直接使用数据库存储
+            db_handler.save_complex_data(向量存储文件, "vector_data", json.dumps(向量数据, ensure_ascii=False))
             
             return dataID
         except Exception as e:
@@ -1573,25 +1560,25 @@ class MyPlugin(Star):
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                # 一次性读取并更新整个文件，减少文件操作次数
+            # 一次性读取并更新整个文件，减少文件操作次数
                 token_data = Json.读取Json字典(self.token_file)
                 token_data["token"] = token
                 token_data["last_update"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                
+            
                 # 解析并保存过期时间
                 expiry = self._parse_token_expiry(token)
                 if expiry:
                     token_data["expiry"] = expiry.strftime("%Y-%m-%d %H:%M:%S")
-                
+            
                 # 写入文件
-                文件路径 = JsonHandler.获取文件路径(self.token_file, True)
-                with open(文件路径, 'w', encoding='utf-8') as f:
-                    json.dump(token_data, f, ensure_ascii=False, indent=2)
+                # 直接使用数据库存储token数据
+                db_handler.save_complex_data(self.token_file, "token_data", json.dumps(token_data, ensure_ascii=False))
                 
                 # 更新当前token
                 self.current_token = token
                 logger.info(f"已保存新token，长度: {len(token)} 字符，尝试次数: {attempt + 1}")
                 return True
+
             except Exception as e:
                 logger.error(f"保存token失败 (尝试 {attempt + 1}/{max_retries}): {e}")
                 if attempt < max_retries - 1:
@@ -1599,6 +1586,7 @@ class MyPlugin(Star):
                     time.sleep(1)
                 else:
                     logger.error(f"保存token达到最大重试次数，保存失败")
+            
         return False
     
     async def _check_token_expiry(self):
@@ -1944,10 +1932,10 @@ class MyPlugin(Star):
                     # 创建新的签到数据字典，所有值设为false
                     新签到数据 = {key: "false" for key in 签到数据.keys()}
                     # 写入文件
-                    文件路径 = JsonHandler.获取文件路径("玩家今天是否签到过.json", True)
-                    with open(文件路径, 'w', encoding='utf-8') as f:
-                        json.dump(新签到数据, f, ensure_ascii=False, indent=2)
-                    logger.info(f"已重置{len(新签到数据)}条签到记录")
+                    # 直接使用数据库存储所有签到数据
+            for key, value in 新签到数据.items():
+                    db_handler.save_key_value("玩家今天是否签到过.json", key, value)
+            logger.info(f"已重置{len(新签到数据)}条签到记录")
         except Exception as e:
             logger.error(f"检查和更新数据保质期时出错: {e}")
             import traceback
@@ -2538,9 +2526,8 @@ class MyPlugin(Star):
                 "群聊ID": event.get_group_id()
             }
             # 保存抽奖数据
-            文件路径 = JsonHandler.获取文件路径("抽奖数据存储.json", True)
-            with open(文件路径, 'w', encoding='utf-8') as f:
-                json.dump(抽奖数据, f, ensure_ascii=False, indent=2)
+            # 直接使用数据库存储抽奖数据
+            db_handler.save_complex_data("抽奖数据存储.json", "lottery_data", json.dumps(抽奖数据, ensure_ascii=False))
 
             async for msg in self.发送消息(event, f"🎊 抽奖发起成功！🎊\n\n抽奖ID：{抽奖ID}\n游戏名称：{游戏名称}\n奖励名称：{奖励名称}\n奖励数量：{奖励数量}\n获奖人数：{抽奖人数}\n截止时间：{开奖截止时间.strftime('%Y-%m-%d %H:%M:%S')}\n\n请使用「参与抽奖 {抽奖ID}」命令参与抽奖\n祝您好运！🎉"):
                 yield msg
