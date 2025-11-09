@@ -1637,8 +1637,8 @@ class MyPlugin(Star):
                 yield msg
             return
         # 检查是否为管理员
-        if(event.is_admin()!="admin"):
-            async for msg in self.发送消息(event, "您没有权限使用此命令。"+event.is_admin()):
+        if(event.is_admin()!=True):
+            async for msg in self.发送消息(event, "您没有权限使用此命令。"):
                 yield msg
             return
         # 解析抽奖名称
