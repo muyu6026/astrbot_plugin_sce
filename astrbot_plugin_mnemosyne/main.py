@@ -51,23 +51,65 @@ class MnemosynePlugin(plugin.Plugin):
         await super().on_load()
         logger.info(f"正在加载 {self.name} 插件 v{self.version}")
         
-        # 确保数据目录存在
-        os.makedirs("./data", exist_ok=True)
-        
-        # 初始化 Milvus
-        self._init_milvus()
-        
-        # 加载配置
-        self._load_config()
-        
-        logger.info(f"{self.name} 插件加载完成")
+        try:
+            # 加载配置
+            self._load_config()
+            
+            # 确保数据目录存在，使用绝对路径
+            db_path = os.path.abspath(self.config["milvus_lite_path"])
+            db_dir = os.path.dirname(db_path)
+            
+            logger.info(f"确保数据目录存在: {db_dir}")
+            os.makedirs(db_dir, exist_ok=True)
+            
+            # 初始化 Milvus
+            self._init_milvus()
+            
+            # 检查初始化结果
+            if self.milvus_client is not None:
+                logger.info(f"Milvus 客户端初始化成功")
+            else:
+                logger.warning(f"Milvus 客户端初始化失败，将以有限功能运行")
+                logger.info("建议检查数据库路径权限或尝试删除损坏的数据库文件")
+                
+            logger.info(f"{self.name} 插件加载完成")
+            
+        except Exception as e:
+            logger.error(f"插件加载过程中发生错误: {e}")
+            logger.error(f"错误类型: {type(e).__name__}")
+            # 即使出错也要确保插件能以有限功能运行
+            self.milvus_client = None
+            logger.warning("插件将以有限功能运行（无法存储和检索记忆）")
     
     def _init_milvus(self):
         """初始化 Milvus 客户端"""
         try:
-            # 使用 Milvus Lite
-            logger.info(f"正在初始化 Milvus Lite: {self.config['milvus_lite_path']}")
-            self.milvus_client = MilvusClient(self.config["milvus_lite_path"])
+            # 确保使用绝对路径，并检查目录权限
+            db_path = os.path.abspath(self.config["milvus_lite_path"])
+            db_dir = os.path.dirname(db_path)
+            
+            logger.info(f"正在初始化 Milvus Lite: {db_path}")
+            
+            # 检查并创建目录
+            if not os.path.exists(db_dir):
+                try:
+                    os.makedirs(db_dir, exist_ok=True)
+                    logger.info(f"成功创建数据库目录: {db_dir}")
+                except Exception as dir_error:
+                    logger.error(f"创建数据库目录失败: {dir_error}")
+                    raise
+            
+            # 检查目录权限
+            if not os.access(db_dir, os.W_OK):
+                logger.error(f"无写权限访问目录: {db_dir}")
+                raise PermissionError(f"无写权限访问目录: {db_dir}")
+            
+            # 尝试使用更简单的配置初始化 Milvus Lite
+            # 添加连接参数
+            self.milvus_client = MilvusClient(
+                uri=db_path,
+                db_name="mnemosyne_db"
+            )
             logger.info(f"成功初始化 Milvus Lite")
             
             # 创建默认集合（如果不存在）
@@ -75,10 +117,23 @@ class MnemosynePlugin(plugin.Plugin):
             
         except Exception as e:
             logger.error(f"Milvus 初始化失败: {e}")
+            logger.error(f"错误类型: {type(e).__name__}")
+            # 尝试清理可能损坏的数据库文件
+            if os.path.exists(db_path):
+                try:
+                    logger.info(f"尝试移除可能损坏的数据库文件: {db_path}")
+                    os.remove(db_path)
+                    logger.info("数据库文件已移除，请重新启动插件")
+                except Exception as remove_error:
+                    logger.error(f"移除数据库文件失败: {remove_error}")
             self.milvus_client = None
     
     def _create_collection(self):
         """创建 Milvus 集合"""
+        if self.milvus_client is None:
+            logger.error("无法创建集合：Milvus 客户端未初始化")
+            return
+            
         try:
             # 检查集合是否存在
             if not self.milvus_client.has_collection(self.config["collection_name"]):
@@ -92,7 +147,8 @@ class MnemosynePlugin(plugin.Plugin):
                     FieldSchema(name="session_id", dtype=DataType.VARCHAR, max_length=36, description="会话ID"),
                     FieldSchema(name="persona_id", dtype=DataType.VARCHAR, max_length=50, description="人格ID"),
                     FieldSchema(name="timestamp", dtype=DataType.INT64, description="时间戳"),
-                    FieldSchema(name="metadata", dtype=DataType.JSON, description="元数据"),
+                    # 避免使用JSON类型，某些环境可能不支持
+                    FieldSchema(name="metadata", dtype=DataType.VARCHAR, max_length=1024, description="元数据"),
                 ]
                 
                 # 创建集合
@@ -105,8 +161,41 @@ class MnemosynePlugin(plugin.Plugin):
                 logger.info(f"集合创建成功: {self.config['collection_name']}")
             else:
                 logger.info(f"集合已存在: {self.config['collection_name']}")
+                # 确保集合可以正常访问
+                try:
+                    stats = self.milvus_client.get_collection_stats(self.config["collection_name"])
+                    logger.info(f"集合状态正常，统计信息: {stats}")
+                except Exception as check_error:
+                    logger.error(f"集合检查失败: {check_error}")
+                    logger.info("尝试重新创建集合")
+                    # 尝试删除并重新创建集合
+                    try:
+                        self.milvus_client.drop_collection(self.config["collection_name"])
+                        logger.info("已删除问题集合，将重新创建")
+                        # 递归调用以重新创建集合
+                        self._create_collection()
+                    except Exception as drop_error:
+                        logger.error(f"删除问题集合失败: {drop_error}")
         except Exception as e:
             logger.error(f"创建 Milvus 集合失败: {e}")
+            logger.error(f"错误类型: {type(e).__name__}")
+            # 尝试使用更简单的模式
+            try:
+                logger.info("尝试使用更简化的集合配置")
+                simple_fields = [
+                    FieldSchema(name="id", dtype=DataType.VARCHAR, max_length=36, is_primary=True),
+                    FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=self.config["embedding_dimension"]),
+                    FieldSchema(name="text", dtype=DataType.VARCHAR, max_length=65535),
+                ]
+                self.milvus_client.create_collection(
+                    collection_name=self.config["collection_name"],
+                    schema=CollectionSchema(fields=simple_fields),
+                    dimension=self.config["embedding_dimension"],
+                    metric_type="COSINE"
+                )
+                logger.info("使用简化配置成功创建集合")
+            except Exception as simple_error:
+                logger.error(f"使用简化配置创建集合也失败: {simple_error}")
     
     def _load_config(self):
         """加载配置"""
@@ -200,7 +289,7 @@ class MnemosynePlugin(plugin.Plugin):
                 embedding = await self._get_embedding(ctx, summary)
                 
                 if embedding:
-                    # 准备存储数据
+                    # 准备存储数据，将metadata转换为JSON字符串
                     memory_data = [{
                         "id": str(uuid.uuid4()),
                         "vector": embedding,
@@ -208,10 +297,10 @@ class MnemosynePlugin(plugin.Plugin):
                         "session_id": session_id,
                         "persona_id": persona_id,
                         "timestamp": int(time.time()),
-                        "metadata": {
+                        "metadata": json.dumps({
                             "source": "conversation_summary",
                             "message_count": len(conversation)
-                        }
+                        })
                     }]
                     
                     # 存储到 Milvus
@@ -303,12 +392,19 @@ class MnemosynePlugin(plugin.Plugin):
             memories = []
             for hits in search_results:
                 for hit in hits:
+                    # 尝试解析metadata JSON字符串
+                    metadata_str = hit.get("entity", {}).get("metadata", "{}")
+                    try:
+                        metadata = json.loads(metadata_str) if metadata_str else {}
+                    except json.JSONDecodeError:
+                        metadata = {"raw": metadata_str}
+                        
                     memories.append({
                         "id": hit["id"],
                         "text": hit.get("entity", {}).get("text", ""),
                         "distance": hit["distance"],
                         "timestamp": hit.get("entity", {}).get("timestamp", 0),
-                        "metadata": hit.get("entity", {}).get("metadata", {})
+                        "metadata": metadata
                     })
             
             # 按时间戳排序
@@ -387,7 +483,17 @@ class MnemosynePlugin(plugin.Plugin):
                 text = record.get("text", "").replace("\n", " ")[:100]
                 timestamp = datetime.fromtimestamp(record.get("timestamp", 0)).strftime("%Y-%m-%d %H:%M:%S")
                 session_id = record.get("session_id", "").split("-")[0]
-                reply += f"{i+1}. [{timestamp}] [{session_id}] {text}...\n"
+                # 尝试解析metadata
+                metadata = record.get("metadata", "{}")
+                try:
+                    if isinstance(metadata, str):
+                        metadata = json.loads(metadata)
+                except json.JSONDecodeError:
+                    metadata = {}
+                
+                # 添加元数据信息
+                source = metadata.get("source", "unknown")
+                reply += f"{i+1}. [{timestamp}] [{session_id}] [{source}] {text}...\n"
             
             await ctx.reply(reply)
         except Exception as e:
