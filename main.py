@@ -503,7 +503,7 @@ class EmailService:
         return {"success": False, "message": "所有尝试均失败，请检查token是否有效"}
 
 # 主程序功能整合
-@register("sce_spark_game", "开发者", "SCE星火游戏插件", "1.0.0")
+@register("sce_spark_game", "开发者", "SCE星火游戏插件", "1.3.1")
 class MyPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
