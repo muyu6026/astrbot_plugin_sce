@@ -529,22 +529,22 @@ class MyPlugin(Star):
             "捉妖:钟馗": {
                 "项目ID": "p_95jd",
                 "发送的奖励": "$p_95jd.lobby_resource.魂晶.root:999",
-                "URL": "https://developer.spark.xd.com/dashboard/p_95jd/firm0_lv_1_1_1?tab_firm0_app_submit_game=firm0_app_submit_game&tab_firm0_app_submit_game_history=firm0_app_submit_game_history"
+                "URL": "https://developer.spark.xd.com/dashboard/p_95jd/firm0_lv_2_4_1"
             },
-            "魂晶": {
+            "游戏2": {
                 "项目ID": "p_95jd",
                 "发送的奖励": "$p_95jd.lobby_resource.魂晶.root:100",
-                "URL": "https://developer.spark.xd.com/dashboard/p_95jd/firm0_lv_1_1_1?tab_firm0_app_submit_game=firm0_app_submit_game&tab_firm0_app_submit_game_history=firm0_app_submit_game_history"
+                "URL": "https://developer.spark.xd.com/dashboard/p_95jd/firm0_lv_2_4_1"
             },
-            "金币": {
+            "游戏3": {
                 "项目ID": "p_95jd",
                 "发送的奖励": "$p_95jd.lobby_resource.金币.root:5000",
-                "URL": "https://developer.spark.xd.com/dashboard/p_95jd/firm0_lv_1_1_1?tab_firm0_app_submit_game=firm0_app_submit_game&tab_firm0_app_submit_game_history=firm0_app_submit_game_history"
+                "URL": "https://developer.spark.xd.com/dashboard/p_95jd/firm0_lv_2_4_1"
             },
-            "钻石": {
+            "游戏4": {
                 "项目ID": "p_95jd",
                 "发送的奖励": "$p_95jd.lobby_resource.钻石.root:50",
-                "URL": "https://developer.spark.xd.com/dashboard/p_95jd/firm0_lv_1_1_1?tab_firm0_app_submit_game=firm0_app_submit_game&tab_firm0_app_submit_game_history=firm0_app_submit_game_history"
+                "URL": "https://developer.spark.xd.com/dashboard/p_95jd/firm0_lv_2_4_1"
             }
         }
         
