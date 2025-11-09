@@ -11,13 +11,13 @@ import time
 import random
 import sqlite3
 from typing import Dict, Any, Optional
-# 尝试导入Milvus Lite
+# 导入Milvus Lite
 MilvusClient = None
 try:
     from pymilvus import MilvusClient
     logger.info("成功导入Milvus Lite")
 except ImportError:
-    logger.warning("未安装Milvus Lite，将使用SQLite作为替代存储")
+    logger.warning("未安装Milvus Lite，请安装：pip install pymilvus[milvus_lite]")
 # JSON处理模块
 class JsonHandler:
     @staticmethod
@@ -42,34 +42,22 @@ class JsonHandler:
     
     @staticmethod
     def 读取Json字典(文件名: str) -> dict:
-        """从数据库读取JSON数据并返回字典"""
+        """从数据库读取数据并返回字典"""
         try:
-            # 首先尝试从数据库读取
+            # 首先尝试从数据库读取完整数据
             complex_data = db_handler.get_complex_data(文件名, "完整数据")
             if complex_data:
                 return json.loads(complex_data)
             
-            # 如果数据库中没有，尝试读取简单键值对并构建字典
+            # 如果数据库中没有完整数据，尝试读取简单键值对并构建字典
             key_values = db_handler.get_all_key_values(文件名)
             if key_values:
                 return {key: value for key, value in key_values}
             
-            # 作为后备方案，尝试从文件读取（兼容旧数据）
-            文件路径 = JsonHandler.获取文件路径(文件名, True)
-            if os.path.exists(文件路径):
-                with open(文件路径, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    # 如果从文件读取成功，同步到数据库
-                    if isinstance(data, dict):
-                        if any(isinstance(v, (dict, list)) for v in data.values()):
-                            db_handler.save_complex_data(文件名, "完整数据", json.dumps(data, ensure_ascii=False))
-                        else:
-                            for key, value in data.items():
-                                db_handler.save_key_value(文件名, key, str(value))
-                    return data
+            # 如果数据库中也没有数据，返回空字典
             return {}
         except Exception as e:
-            print(f"读取JSON数据错误: {e}")
+            print(f"读取数据错误: {e}")
             return {}
     
     @staticmethod
@@ -79,32 +67,9 @@ class JsonHandler:
     
     @staticmethod
     def 获取文件路径(文件名: str, 确保目录存在: bool = False) -> str:
-        """获取JSON文件的完整路径"""
-        # 验证文件名是否合法
-        if not JsonHandler.验证文件名(文件名):
-            raise ValueError(f"无效的文件名: {文件名}")
-        
-        # 获取项目根目录
-        项目根目录 = Path(__file__).parent
-        
-        # 构建UserData文件夹的绝对路径
-        用户数据目录 = 项目根目录 / "UserData"
-        
-        # 构建文件的完整路径
-        文件路径 = 用户数据目录 / 文件名
-        
-        # 安全检查：确保最终路径仍然在UserData目录内
-        规范后的文件路径 = 文件路径.resolve()
-        规范后的用户数据目录 = 用户数据目录.resolve()
-        
-        if not str(规范后的文件路径).startswith(str(规范后的用户数据目录)):
-            raise SecurityError(f"安全错误: 尝试访问UserData目录外的文件: {文件名}")
-        
-        # 如果需要确保目录存在
-        if 确保目录存在:
-            os.makedirs(规范后的用户数据目录, exist_ok=True)
-        
-        return str(规范后的文件路径)
+        """获取文件路径（已废弃，但为保持兼容性保留）"""
+        logger.warning("获取文件路径方法已废弃，请直接使用数据库存储")
+        return ""
     
     @staticmethod
     def 读取Json字典(文件名: str) -> dict:
@@ -144,24 +109,16 @@ class JsonHandler:
                 print("错误: 键名不能为空")
                 return False
             
-            # 保存到数据库
+            # 仅保存到数据库
             result = db_handler.save_key_value(文件名, 键, str(值))
-            
-            # 作为后备，也更新文件（兼容旧代码）
-            字典 = JsonHandler.读取Json字典(文件名)
-            字典[键] = 值
-            文件路径 = JsonHandler.获取文件路径(文件名, True)
-            with open(文件路径, 'w', encoding='utf-8') as f:
-                json.dump(字典, f, ensure_ascii=False, indent=2)
-                
             return result
         except Exception as ex:
-            print(f"错误: 添加或更新JSON值时发生错误 - {ex}")
+            print(f"错误: 添加或更新数据库值时发生错误 - {ex}")
             return False
     
     @staticmethod
     def 存储向量数据(集合名称: str, 数据ID: str, 向量: list, 元数据: dict = None) -> str:
-        """存储向量数据到Milvus Lite或降级到SQLite/JSON
+        """存储向量数据到Milvus Lite或降级到SQLite
         
         Args:
             集合名称: 向量集合名称
@@ -190,19 +147,9 @@ class JsonHandler:
                 
                 # 保存到SQLite
                 if db_handler.save_complex_data(key, "vector_data", json.dumps(stored_data, ensure_ascii=False)):
-                    return dataID
+                    return 数据ID
                 
-                # 最后降级到JSON文件
-                logger.warning("SQLite存储失败，尝试保存到JSON文件")
-                向量存储文件 = f"向量存储_{集合名称}.json"
-                向量数据 = JsonHandler.读取Json字典(向量存储文件)
-                向量数据[数据ID] = stored_data
-                
-                文件路径 = JsonHandler.获取文件路径(向量存储文件, True)
-                with open(文件路径, 'w', encoding='utf-8') as f:
-                    json.dump(向量数据, f, ensure_ascii=False, indent=2)
-                
-                return 数据ID
+                return None
         except Exception as e:
             logger.error(f"存储向量数据失败: {e}")
             return None
@@ -289,18 +236,17 @@ class JsonHandler:
             return []
     
     @staticmethod
-    def is_milvus_available() -> bool:
+    def is_milvus_available():
         """检查Milvus Lite是否可用
         
         Returns:
-            Milvus Lite是否可用
+            bool: Milvus Lite是否可用
         """
         try:
-            # 检查全局MilvusClient和db_handler的Milvus客户端
-            return MilvusClient is not None and db_handler._milvus_client is not None
+            db_handler = DatabaseHandler()
+            return db_handler._milvus_client is not None
         except Exception:
             return False
-        return db_handler.store_vector(集合名称, 数据ID, 向量, 元数据)
     
     @staticmethod
     def 搜索相似向量(集合名称: str, 查询向量: list, top_k: int = 5) -> list:
@@ -318,12 +264,12 @@ class JsonHandler:
     
     @staticmethod
     def is_milvus_available() -> bool:
-        """检查Milvus Lite是否可用
+        """检查Milvus Lite是否可用（始终返回False，已废弃）
         
         Returns:
             Milvus Lite是否可用
         """
-        return MilvusClient is not None
+        return False
         try:
             # 这里是向量存储的占位实现
             # 实际项目中应替换为真正的Milvus Lite实现
@@ -389,18 +335,12 @@ class JsonHandler:
     
     @staticmethod
     def is_milvus_available() -> bool:
-        """检查Milvus Lite是否可用
+        """检查Milvus Lite是否可用（始终返回False，已废弃）
         
         Returns:
             Milvus Lite是否可用
         """
-        # 占位实现，实际项目中应检查Milvus Lite客户端是否可用
-        try:
-            # 尝试导入Milvus相关模块
-            import pymilvus
-            return True
-        except ImportError:
-            return False
+        return False
 
 # 创建别名方便使用
 Json = JsonHandler
@@ -477,21 +417,16 @@ class DatabaseHandler:
         """初始化Milvus Lite客户端"""
         try:
             if MilvusClient is not None:
-                try:
-                    # 创建Milvus Lite数据库文件
-                    项目根目录 = Path(__file__).parent
-                    milvus_db_path = str(项目根目录 / "UserData" / "milvus_data.db")
-                    self._milvus_client = MilvusClient(milvus_db_path)
-                    logger.info(f"成功初始化Milvus Lite: {milvus_db_path}")
-                    
-                    # 创建默认集合（如果不存在）
-                    self._create_default_collections()
-                except Exception as inner_e:
-                    logger.warning(f"Milvus Lite初始化失败（将继续使用SQLite）: {inner_e}")
-                    logger.info("如需使用向量搜索功能，请安装完整的Milvus Lite: pip install pymilvus[milvus_lite]")
-                    self._milvus_client = None
+                # 创建Milvus Lite数据库文件
+                项目根目录 = Path(__file__).parent
+                milvus_db_path = str(项目根目录 / "UserData" / "milvus_data.db")
+                self._milvus_client = MilvusClient(milvus_db_path)
+                logger.info(f"成功初始化Milvus Lite: {milvus_db_path}")
+                
+                # 创建默认集合（如果不存在）
+                self._create_default_collections()
             else:
-                logger.info("Milvus Lite未安装，使用SQLite作为替代存储")
+                logger.error("Milvus Lite未安装，请安装后重新启动插件")
         except Exception as e:
             logger.error(f"Milvus初始化过程异常: {e}")
             self._milvus_client = None
@@ -516,8 +451,6 @@ class DatabaseHandler:
                     logger.info(f"创建向量集合: {collection['name']}")
         except Exception as e:
             logger.error(f"创建默认向量集合失败: {e}")
-            # 即使集合创建失败，也不影响插件继续运行
-            pass
     
     def insert_vector(self, collection_name, data_id, vector, metadata=None):
         """插入向量数据"""
@@ -681,44 +614,42 @@ class DatabaseHandler:
             return None
     
     def store_vector(self, collection_name, data_id, vector, metadata=None):
-        """存储向量数据，优先使用Milvus Lite，降级到SQLite"""
+        """存储单个向量数据，优先使用Milvus Lite，降级到SQLite"""
         # 优先尝试Milvus存储
         if self._milvus_client is not None:
             try:
                 # 确保集合存在
                 if not self._milvus_client.has_collection(collection_name):
-                    # 默认为768维向量
+                    # 创建集合
                     self._milvus_client.create_collection(
                         collection_name=collection_name,
-                        dimension=len(vector) if vector else 768
+                        dimension=len(vector)
                     )
-                    logger.info(f"创建新的向量集合: {collection_name}")
+                    logger.info(f"创建向量集合: {collection_name}")
                 
-                # 准备数据
-                data = {
+                # 准备实体数据
+                entity = {
                     "id": data_id,
-                    "vector": vector,
-                    "metadata": metadata or {}
+                    "vector": vector
                 }
                 
-                # 插入向量
-                result = self._milvus_client.insert(
+                # 添加元数据
+                if metadata:
+                    entity.update(metadata)
+                
+                # 插入数据
+                self._milvus_client.insert(
                     collection_name=collection_name,
-                    data=[data]
+                    data=[entity]
                 )
                 
-                # 保存映射关系
-                if result.get("insert_count") == 1:
-                    milvus_id = data_id  # 使用data_id作为milvus_id
-                    self._save_vector_mapping(collection_name, data_id, milvus_id)
-                    return milvus_id
+                # 保存向量ID映射（用于SQLite查询）
+                self._save_vector_mapping(collection_name, data_id, str(vector[:5]))
                 
-                # 插入失败，尝试降级到SQLite
-                logger.warning("Milvus插入失败，降级到SQLite存储")
-                return self._store_vector_to_sqlite(collection_name, data_id, vector, metadata)
+                logger.info(f"成功存储向量数据到Milvus: {collection_name} - {data_id}")
+                return data_id
             except Exception as e:
-                logger.warning(f"Milvus存储失败，降级到SQLite: {e}")
-                # 降级到SQLite存储
+                logger.warning(f"Milvus插入失败，降级到SQLite存储")
                 return self._store_vector_to_sqlite(collection_name, data_id, vector, metadata)
         else:
             # Milvus不可用，直接使用SQLite
@@ -726,7 +657,7 @@ class DatabaseHandler:
             return self._store_vector_to_sqlite(collection_name, data_id, vector, metadata)
     
     def _store_vector_to_sqlite(self, collection_name, data_id, vector, metadata=None):
-        """将单个向量数据存储到SQLite数据库（降级方案）"""
+        """将单个向量数据存储到SQLite数据库"""
         try:
             # 构建存储键名
             key = f"vector_{collection_name}_{data_id}"
@@ -734,11 +665,14 @@ class DatabaseHandler:
                 "vector": vector,
                 "metadata": metadata or {},
                 "timestamp": time.time(),
-                "storage_type": "sqlite_backup"
+                "storage_type": "sqlite"
             }
             
             # 保存到SQLite的complex_data表
             if self.save_complex_data(key, "vector_data", json.dumps(stored_data, ensure_ascii=False)):
+                # 保存映射关系
+                self._save_vector_mapping(collection_name, data_id, str(vector[:5]))
+                logger.info(f"成功存储向量数据到SQLite: {collection_name} - {data_id}")
                 return data_id
             return None
         except Exception as e:
@@ -746,60 +680,14 @@ class DatabaseHandler:
             return None
     
     def store_vectors(self, collection_name, vector_data):
-        """批量存储向量数据，优先使用Milvus Lite，降级到SQLite"""
-        # 优先尝试Milvus存储
-        if self._milvus_client is not None:
-            try:
-                # 确保集合存在
-                if not self._milvus_client.has_collection(collection_name):
-                    # 自动确定向量维度
-                    vectors = vector_data.get("vectors", [])
-                    if vectors:
-                        dimension = len(vectors[0])
-                        self._milvus_client.create_collection(
-                            collection_name=collection_name,
-                            dimension=dimension
-                        )
-                        logger.info(f"自动创建向量集合: {collection_name}, 维度: {dimension}")
-                    else:
-                        logger.error("无法确定向量维度")
-                        # 降级到SQLite
-                        return self._store_vectors_to_sqlite(collection_name, vector_data)
-                
-                # 准备插入数据
-                entities = []
-                vectors = vector_data.get("vectors", [])
-                metadata_list = vector_data.get("metadata", [])
-                
-                for i, vector in enumerate(vectors):
-                    entity = {
-                        "vector": vector,
-                        "id": i
-                    }
-                    
-                    # 添加元数据（如果有）
-                    if i < len(metadata_list) and isinstance(metadata_list[i], dict):
-                        entity.update(metadata_list[i])
-                    
-                    entities.append(entity)
-                
-                # 插入数据
-                self._milvus_client.insert(
-                    collection_name=collection_name,
-                    data=entities
-                )
-                
-                logger.info(f"成功存储{len(entities)}条向量数据到集合: {collection_name}")
-                return True
-                
-            except Exception as e:
-                logger.warning(f"Milvus存储失败，降级到SQLite: {e}")
-                # 降级到SQLite存储
-                return self._store_vectors_to_sqlite(collection_name, vector_data)
-        else:
-            # Milvus不可用，直接使用SQLite
-            logger.info(f"Milvus不可用，使用SQLite存储向量数据: {collection_name}")
+        """批量存储向量数据（完全使用SQLite）"""
+        try:
+            # 直接使用SQLite存储向量数据
+            logger.info(f"使用SQLite存储向量数据: {collection_name}")
             return self._store_vectors_to_sqlite(collection_name, vector_data)
+        except Exception as e:
+            logger.error(f"存储向量失败: {e}")
+            return False
     
     def _store_vectors_to_sqlite(self, collection_name, vector_data):
         """将批量向量数据存储到SQLite数据库（降级方案）"""
@@ -823,112 +711,101 @@ class DatabaseHandler:
             return False
     
     def search_vectors(self, collection_name, query_vector, top_k=5):
-        """搜索相似向量，优先使用Milvus Lite，降级到SQLite"""
-        # 优先尝试Milvus搜索
-        if self._milvus_client is not None:
-            try:
-                if not self._milvus_client.has_collection(collection_name):
-                    logger.warning(f"集合不存在: {collection_name}")
-                    # 降级到SQLite搜索
-                    return self._search_vectors_in_sqlite(collection_name, query_vector, top_k)
-                
-                # 搜索向量
-                results = self._milvus_client.search(
-                    collection_name=collection_name,
-                    data=[query_vector],
-                    limit=top_k,
-                    search_params={"metric_type": "COSINE"}
-                )
-                
-                # 处理结果
-                search_results = []
-                for result in results[0]:
-                    search_results.append({
-                        "id": result.get("id"),
-                        "distance": result.get("distance"),
-                        "metadata": result.get("entity", {}).get("metadata", {})
-                    })
-                
-                return search_results
-            except Exception as e:
-                logger.warning(f"Milvus搜索失败，降级到SQLite: {e}")
-                # 降级到SQLite搜索
-                return self._search_vectors_in_sqlite(collection_name, query_vector, top_k)
-        else:
-            # Milvus不可用，直接使用SQLite搜索
-            logger.info(f"Milvus不可用，使用SQLite搜索向量数据: {collection_name}")
+        """搜索相似向量（完全使用SQLite）"""
+        try:
+            # 直接使用SQLite搜索向量数据
+            logger.info(f"使用SQLite搜索向量数据: {collection_name}")
             return self._search_vectors_in_sqlite(collection_name, query_vector, top_k)
+        except Exception as e:
+            logger.error(f"搜索向量失败: {e}")
+            return []
     
     def _search_vectors_in_sqlite(self, collection_name, query_vector, top_k=5):
-        """在SQLite中搜索相似向量（降级方案）"""
+        """在SQLite中搜索相似向量"""
         try:
-            results = []
+            # 从SQLite读取向量集合数据
+            key = f"vector_collection_{collection_name}"
+            collection_data = self.get_complex_data(key)
             
-            # 方法1: 搜索向量集合数据
-            collection_key = f"vector_collection_{collection_name}"
-            collection_data_str = self.get_complex_data(collection_key, "vector_collection_data")
-            
-            if collection_data_str:
-                try:
-                    collection_data = json.loads(collection_data_str)
-                    vectors = collection_data.get("vectors", [])
-                    metadata_list = collection_data.get("metadata", [])
-                    
-                    for i, vector in enumerate(vectors):
-                        try:
-                            # 计算余弦相似度
-                            similarity = sum(a * b for a, b in zip(query_vector, vector))
-                            query_norm = sum(x * x for x in query_vector) ** 0.5
-                            vector_norm = sum(x * x for x in vector) ** 0.5
-                            
-                            if query_norm > 0 and vector_norm > 0:
-                                similarity = similarity / (query_norm * vector_norm)
-                                metadata = metadata_list[i] if i < len(metadata_list) else {}
-                                
-                                results.append({
-                                    "id": str(i),
-                                    "distance": 1 - similarity,
-                                    "metadata": metadata
-                                })
-                        except Exception as inner_e:
-                            logger.warning(f"计算集合向量相似度失败: {inner_e}")
-                except Exception as e:
-                    logger.warning(f"解析集合数据失败: {e}")
-            
-            # 方法2: 搜索单个向量数据
-            if len(results) < top_k:  # 如果集合搜索结果不足，再搜索单个向量
-                key_prefix = f"vector_{collection_name}_"
-                # 获取所有相关的向量数据
-                all_data = db_handler.get_all_key_values("")
-                for key, value in all_data:
-                    if key.startswith(key_prefix) and len(results) < top_k:
-                        try:
-                            # 从SQLite读取向量数据
-                            vector_data_str = db_handler.get_complex_data(key, "vector_data")
-                            if vector_data_str:
+            if not collection_data or "vectors" not in collection_data:
+                # 尝试从vector_mappings表获取所有相关的向量数据
+                logger.info(f"尝试从vector_mappings表获取向量数据: {collection_name}")
+                mappings = self._get_vector_mappings(collection_name)
+                
+                # 如果有映射关系，逐个获取向量数据
+                if mappings:
+                    results = []
+                    for mapping in mappings:
+                        vector_key = f"vector_{collection_name}_{mapping['vector_id']}"
+                        vector_data_str = self.get_complex_data(vector_key, "vector_data")
+                        
+                        if vector_data_str:
+                            try:
                                 vector_data = json.loads(vector_data_str)
                                 vector = vector_data.get("vector", [])
+                                
                                 if vector:
-                                    # 计算余弦相似度
+                                    # 计算向量点积
                                     similarity = sum(a * b for a, b in zip(query_vector, vector))
+                                    
+                                    # 计算向量长度
                                     query_norm = sum(x * x for x in query_vector) ** 0.5
                                     vector_norm = sum(x * x for x in vector) ** 0.5
                                     
                                     if query_norm > 0 and vector_norm > 0:
+                                        # 计算余弦相似度
                                         similarity = similarity / (query_norm * vector_norm)
                                         
-                                        # 提取数据ID
-                                        data_id = key.replace(key_prefix, "")
                                         results.append({
-                                            "id": data_id,
-                                            "distance": 1 - similarity,
+                                            "id": mapping['vector_id'],
+                                            "distance": 1 - similarity,  # 距离是1-相似度
+                                            "score": similarity,
+                                            "vector": vector,
                                             "metadata": vector_data.get("metadata", {})
                                         })
-                        except Exception as inner_e:
-                            logger.warning(f"处理SQLite向量数据失败: {inner_e}")
+                            except Exception as inner_e:
+                                logger.warning(f"解析向量数据失败: {inner_e}")
+                    
+                    # 按相似度排序并返回前top_k个结果
+                    results.sort(key=lambda x: x["score"], reverse=True)
+                    return results[:top_k]
+                
+                logger.warning(f"没有找到向量数据: {collection_name}")
+                return []
             
-            # 按距离排序（距离越小越相似）
-            results.sort(key=lambda x: x["distance"])
+            # 计算余弦相似度
+            results = []
+            vectors = collection_data.get("vectors", [])
+            metadata_list = collection_data.get("metadata", [])
+            
+            for i, vector in enumerate(vectors):
+                try:
+                    # 计算向量点积
+                    similarity = sum(a * b for a, b in zip(query_vector, vector))
+                    
+                    # 计算向量长度
+                    query_norm = sum(x * x for x in query_vector) ** 0.5
+                    vector_norm = sum(x * x for x in vector) ** 0.5
+                    
+                    if query_norm > 0 and vector_norm > 0:
+                        # 计算余弦相似度
+                        similarity = similarity / (query_norm * vector_norm)
+                        
+                        # 获取对应的元数据
+                        metadata = metadata_list[i] if i < len(metadata_list) else {}
+                        
+                        results.append({
+                            "id": str(i),
+                            "distance": 1 - similarity,  # 距离是1-相似度
+                            "score": similarity,
+                            "vector": vector,
+                            "metadata": metadata
+                        })
+                except Exception as inner_e:
+                    logger.warning(f"计算向量相似度失败: {inner_e}")
+            
+            # 按相似度排序并返回前top_k个结果
+            results.sort(key=lambda x: x["score"], reverse=True)
             return results[:top_k]
             
         except Exception as e:
@@ -954,81 +831,7 @@ class DatabaseHandler:
 # 创建数据库处理实例
 db_handler = DatabaseHandler()
 
-def migrate_json_to_database():
-    """将UserData目录下的所有JSON文件数据迁移到数据库中"""
-    try:
-        logger.info("开始从JSON文件迁移数据到数据库...")
-        
-        # 获取UserData目录路径
-        项目根目录 = Path(__file__).parent
-        用户数据目录 = 项目根目录 / "UserData"
-        
-        # 确保UserData目录存在
-        if not 用户数据目录.exists():
-            logger.warning("UserData目录不存在，跳过数据迁移")
-            return
-        
-        # 获取目录下所有JSON文件
-        json_files = list(用户数据目录.glob("*.json"))
-        migrated_count = 0
-        failed_count = 0
-        
-        logger.info(f"找到 {len(json_files)} 个JSON文件需要迁移")
-        
-        for json_file in json_files:
-            文件名称 = json_file.name
-            logger.info(f"正在迁移文件: {文件名称}")
-            
-            try:
-                # 读取JSON文件内容
-                with open(json_file, 'r', encoding='utf-8') as f:
-                    file_content = f.read().strip()
-                    
-                # 检查文件是否为空
-                if not file_content:
-                    logger.warning(f"文件为空: {文件名称}")
-                    continue
-                
-                # 解析JSON数据
-                data = json.loads(file_content)
-                
-                # 验证数据格式是否为字典
-                if not isinstance(data, dict):
-                    logger.error(f"文件格式错误，不是有效的JSON字典: {文件名称}")
-                    failed_count += 1
-                    continue
-                
-                # 对于复杂数据结构（如抽奖数据），使用复杂数据存储表
-                # 对于简单的键值对，使用键值对存储表
-                
-                # 判断是否为复杂数据
-                is_complex_data = any(isinstance(v, (dict, list)) for v in data.values())
-                
-                if is_complex_data:
-                    # 复杂数据直接存储整个JSON字符串
-                    db_handler.save_complex_data(文件名称, "完整数据", json.dumps(data, ensure_ascii=False))
-                else:
-                    # 简单键值对，逐个存储
-                    for key, value in data.items():
-                        db_handler.save_key_value(文件名称, key, str(value))
-                
-                migrated_count += 1
-                logger.info(f"成功迁移文件: {文件名称}")
-                
-            except json.JSONDecodeError as e:
-                logger.error(f"JSON解析错误 ({文件名称}): {e}")
-                failed_count += 1
-            except Exception as e:
-                logger.error(f"迁移文件失败 ({文件名称}): {e}")
-                failed_count += 1
-        
-        logger.info(f"数据迁移完成! 成功: {migrated_count}, 失败: {failed_count}")
-        
-    except Exception as e:
-        logger.error(f"数据迁移过程中发生错误: {e}")
-
-# 在插件启动时执行数据迁移
-migrate_json_to_database()
+# 注意：不再执行JSON文件迁移，系统完全依赖数据库存储
 
 # 邮件服务模块
 class EmailService:
