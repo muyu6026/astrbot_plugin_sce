@@ -1677,89 +1677,94 @@ class MyPlugin(Star):
                 "参与者":[],
                 "群聊ID": event.get_group_id()
             }
-            Json.添加或更新("抽奖数据存储.json",抽奖ID,抽奖数据)
+            # 保存抽奖数据
+            文件路径 = JsonHandler.获取文件路径("抽奖数据存储.json", True)
+            with open(文件路径, 'w', encoding='utf-8') as f:
+                json.dump(抽奖数据, f, ensure_ascii=False, indent=2)
 
-            async for msg in self.发送消息(event, f"抽奖发起成功！抽奖ID：{抽奖ID}，游戏名称：{游戏名称}，奖励名称：{奖励名称}，获奖人数：{抽奖人数}，截止时间：{开奖截止时间.strftime('%Y-%m-%d %H:%M:%S')}。请使用“参与抽奖 {抽奖ID}”命令参与抽奖。"):
+            async for msg in self.发送消息(event, f"抽奖发起成功！抽奖ID：{抽奖ID}，游戏名称：{游戏名称}，奖励名称：{奖励名称}，获奖人数：{抽奖人数}，截止时间：{开奖截止时间.strftime('%Y-%m-%d %H:%M:%S')}。请使用 参与抽奖 {抽奖ID}命令参与抽奖。"):
                 yield msg
 
             # 创建并启动一个异步任务来等待开奖
             asyncio.create_task(self.等待开奖(开奖时间, 抽奖ID))
-            
-        async def 等待开奖(self,开奖时间, 抽奖ID):
-            """等待开奖"""
-            logger.info("开始等待开奖")
+    
+    async def 等待开奖(self,开奖时间, 抽奖ID):
+        """等待开奖"""
+        logger.info("开始等待开奖")
+        try:
+            # 等待指定的开奖时间
+            await asyncio.sleep(3600 * 开奖时间)
             try:
-                # 等待指定的开奖时间
-                await asyncio.sleep(3600 * 开奖时间)
-                try:
-                    await self.开奖(抽奖ID)
-                except Exception as e:
-                    logger.error(f"定时开奖出错: {e}")
-                except asyncio.CancelledError:
-                    logger.info("开奖任务已取消")
+                await self.开奖(抽奖ID)
             except Exception as e:
-                        logger.error(f"定时任务异常: {e}")
+                logger.error(f"定时开奖出错: {e}")
+            except asyncio.CancelledError:
+                logger.info("开奖任务已取消")
+        except Exception as e:
+            logger.error(f"定时任务异常: {e}")
 
-        async def 开奖(self, 抽奖ID):
-            抽奖数据=Json.读取Json字典("抽奖数据存储.json")
-            if 抽奖ID not in 抽奖数据:
-                return
-            数据=抽奖数据[抽奖ID]
-            参与者列表=数据['参与者']
-            if len(参与者列表)==0:
-                return
-            获奖人数=min(数据['抽奖人数'],len(参与者列表))
+    async def 开奖(self, 抽奖ID):
+        抽奖数据=Json.读取Json字典("抽奖数据存储.json")
+        if 抽奖ID not in 抽奖数据:
+            return
+        数据=抽奖数据[抽奖ID]
+        参与者列表=数据['参与者']
+        if len(参与者列表)==0:
+            return
+        获奖人数=min(数据['抽奖人数'],len(参与者列表))
 
-            获奖者=random.sample(参与者列表,获奖人数)
+        获奖者=random.sample(参与者列表,获奖人数)
 
-            #发送获奖消息
-            消息内容=f"抽奖ID：{抽奖ID}的抽奖活动已结束！\n游戏名称：{数据['游戏名称']}\n奖励名称：{数据['奖励名称']}\n奖励数量：{数据['奖励数量']}\n获奖人数：{获奖人数}\n获奖者名单：{', '.join(获奖者)}"
-            #假设有一个群聊ID存储在数据中
-            群聊ID=数据.get('群聊ID')
-            if 群聊ID:
-                event = AstrMessageEvent()
-                event.set_group_id(群聊ID)
-                async for msg in self.发送消息(event, 消息内容):
-                    yield msg
+        #发送获奖消息
+        消息内容=f"抽奖ID：{抽奖ID}的抽奖活动已结束！\n游戏名称：{数据['游戏名称']}\n奖励名称：{数据['奖励名称']}\n奖励数量：{数据['奖励数量']}\n获奖人数：{获奖人数}\n获奖者名单：{', '.join(获奖者)}"
+        #假设有一个群聊ID存储在数据中
+        群聊ID=数据.get('群聊ID')
+        if 群聊ID:
+            event = AstrMessageEvent()
+            event.set_group_id(群聊ID)
+            async for msg in self.发送消息(event, 消息内容):
+                yield msg
 
-            项目ID = self.game_configs[数据['游戏名称']]['项目ID']
-            奖励字符串 = self.抽奖数据列表[数据['游戏名称']]['发送的奖励']+f":{数据['奖励数量']}"
+        项目ID = self.game_configs[数据['游戏名称']]['项目ID']
+        奖励字符串 = self.抽奖数据列表[数据['游戏名称']]['发送的奖励']+f":{数据['奖励数量']}"
 
-            for 获奖者ID in 获奖者:
-                #发送奖励邮件
-                玩家数据 = Json.读取Json字典("玩家绑定id数据存储.json")
-                发送的用户 = Json.获取值(玩家数据, 获奖者ID)
-                if not 发送的用户:
-                    continue
-                
-                发送的奖励 = {"items": []}
-                if 奖励字符串:
-                    try:
-                        # 提取奖励ID和数量
-                        奖励_id, 数量 = 奖励字符串.split(":")
-                        数量 = int(数量)
-                        # 改进的显示名称提取逻辑
-                        # 1. 尝试从奖励ID中提取中文字符作为显示名称
-                        name_parts = 奖励_id.split(".")
-                        display_name = "奖励"
-                        for part in name_parts:
-                            if any('\u4e00' <= char <= '\u9fff' for char in part):
-                                display_name = part
-                                break
-                        # 2. 如果没有找到中文字符，回退到使用最后一部分
-                        if display_name == "奖励" and name_parts:
-                            display_name = name_parts[-1]
-                        发送的奖励["items"].append(f"{display_name}*{数量}")
-                    except:
-                        发送的奖励["items"] = ["抽奖奖励"]
-                else:
+        for 获奖者ID in 获奖者:
+            #发送奖励邮件
+            玩家数据 = Json.读取Json字典("玩家绑定id数据存储.json")
+            发送的用户 = Json.获取值(玩家数据, 获奖者ID)
+            if not 发送的用户:
+                continue
+            
+            发送的奖励 = {"items": []}
+            if 奖励字符串:
+                try:
+                    # 提取奖励ID和数量
+                    奖励_id, 数量 = 奖励字符串.split(":")
+                    数量 = int(数量)
+                    # 改进的显示名称提取逻辑
+                    # 1. 尝试从奖励ID中提取中文字符作为显示名称
+                    name_parts = 奖励_id.split(".")
+                    display_name = "奖励"
+                    for part in name_parts:
+                        if any('\u4e00' <= char <= '\u9fff' for char in part):
+                            display_name = part
+                            break
+                    # 2. 如果没有找到中文字符，回退到使用最后一部分
+                    if display_name == "奖励" and name_parts:
+                        display_name = name_parts[-1]
+                    发送的奖励["items"].append(f"{display_name}*{数量}")
+                except:
                     发送的奖励["items"] = ["抽奖奖励"]
-                邮件标题 = "抽奖奖励"
-                邮件正文 = f"恭喜您在{数据['游戏名称']}的抽奖活动中获奖！"
-                await self.send_personal_reward_email(self.auth_token, 项目ID, 奖励字符串, 发送的用户, 邮件标题, 邮件正文, 数据['游戏名称'])
-            #删除抽奖数据
-            del 抽奖数据[抽奖ID]
-            Json.添加或更新("抽奖数据存储.json","{游戏名称}_{抽奖ID}",抽奖数据)
+            else:
+                发送的奖励["items"] = ["抽奖奖励"]
+            邮件标题 = "抽奖奖励"
+            邮件正文 = f"恭喜您在{数据['游戏名称']}的抽奖活动中获奖！"
+            await self.send_personal_reward_email(self.auth_token, 项目ID, 奖励字符串, 发送的用户, 邮件标题, 邮件正文, 数据['游戏名称'])
+        #删除抽奖数据
+        del 抽奖数据[抽奖ID]
+        文件路径 = JsonHandler.获取文件路径("抽奖数据存储.json", True)
+        with open(文件路径, 'w', encoding='utf-8') as f:
+            json.dump(抽奖数据, f, ensure_ascii=False, indent=2)
 
     @filter.command("查看抽奖")
     async def 查看抽奖(self, event: AstrMessageEvent):
