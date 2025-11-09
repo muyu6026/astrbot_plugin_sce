@@ -9,6 +9,15 @@ import asyncio
 from pathlib import Path
 import time
 import random
+import sqlite3
+from typing import Dict, Any, Optional
+# 尝试导入Milvus Lite
+MilvusClient = None
+try:
+    from pymilvus import MilvusClient
+    logger.info("成功导入Milvus Lite")
+except ImportError:
+    logger.warning("未安装Milvus Lite，将使用SQLite作为替代存储")
 # JSON处理模块
 class JsonHandler:
     @staticmethod
@@ -33,15 +42,34 @@ class JsonHandler:
     
     @staticmethod
     def 读取Json字典(文件名: str) -> dict:
-        """读取JSON文件并返回字典"""
+        """从数据库读取JSON数据并返回字典"""
         try:
+            # 首先尝试从数据库读取
+            complex_data = db_handler.get_complex_data(文件名, "完整数据")
+            if complex_data:
+                return json.loads(complex_data)
+            
+            # 如果数据库中没有，尝试读取简单键值对并构建字典
+            key_values = db_handler.get_all_key_values(文件名)
+            if key_values:
+                return {key: value for key, value in key_values}
+            
+            # 作为后备方案，尝试从文件读取（兼容旧数据）
             文件路径 = JsonHandler.获取文件路径(文件名, True)
             if os.path.exists(文件路径):
                 with open(文件路径, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+                    data = json.load(f)
+                    # 如果从文件读取成功，同步到数据库
+                    if isinstance(data, dict):
+                        if any(isinstance(v, (dict, list)) for v in data.values()):
+                            db_handler.save_complex_data(文件名, "完整数据", json.dumps(data, ensure_ascii=False))
+                        else:
+                            for key, value in data.items():
+                                db_handler.save_key_value(文件名, key, str(value))
+                    return data
             return {}
         except Exception as e:
-            print(f"读取JSON文件错误: {e}")
+            print(f"读取JSON数据错误: {e}")
             return {}
     
     @staticmethod
@@ -110,24 +138,631 @@ class JsonHandler:
     
     @staticmethod
     def 添加或更新(文件名: str, 键: str, 值: str) -> bool:
-        """向字典添加或更新键值对"""
+        """向数据库添加或更新键值对"""
         try:
             if not 键:
                 print("错误: 键名不能为空")
                 return False
             
+            # 保存到数据库
+            result = db_handler.save_key_value(文件名, 键, str(值))
+            
+            # 作为后备，也更新文件（兼容旧代码）
             字典 = JsonHandler.读取Json字典(文件名)
             字典[键] = 值
             文件路径 = JsonHandler.获取文件路径(文件名, True)
             with open(文件路径, 'w', encoding='utf-8') as f:
                 json.dump(字典, f, ensure_ascii=False, indent=2)
-            return True
+                
+            return result
         except Exception as ex:
             print(f"错误: 添加或更新JSON值时发生错误 - {ex}")
+            return False
+    
+    @staticmethod
+    def 存储向量数据(集合名称: str, 数据ID: str, 向量: list, 元数据: dict = None) -> str:
+        """存储向量数据到Milvus Lite
+        
+        Args:
+            集合名称: 向量集合名称
+            数据ID: 数据唯一标识符
+            向量: 向量数据列表
+            元数据: 可选的元数据字典
+            
+        Returns:
+            成功返回Milvus ID，失败返回None
+        """
+        return db_handler.store_vector(集合名称, 数据ID, 向量, 元数据)
+    
+    @staticmethod
+    def 搜索相似向量(集合名称: str, 查询向量: list, top_k: int = 5) -> list:
+        """搜索相似向量
+        
+        Args:
+            集合名称: 向量集合名称
+            查询向量: 查询向量数据
+            top_k: 返回结果数量
+            
+        Returns:
+            相似向量列表，每个元素包含id、距离和元数据
+        """
+        return db_handler.search_vectors(集合名称, 查询向量, top_k)
+    
+    @staticmethod
+    def is_milvus_available() -> bool:
+        """检查Milvus Lite是否可用
+        
+        Returns:
+            Milvus Lite是否可用
+        """
+        return MilvusClient is not None
+        return db_handler.store_vector(集合名称, 数据ID, 向量, 元数据)
+    
+    @staticmethod
+    def 搜索相似向量(集合名称: str, 查询向量: list, top_k: int = 5) -> list:
+        """搜索相似向量
+        
+        Args:
+            集合名称: 向量集合名称
+            查询向量: 查询向量数据
+            top_k: 返回结果数量
+            
+        Returns:
+            相似向量列表，每个元素包含id、距离和元数据
+        """
+        return db_handler.search_vectors(集合名称, 查询向量, top_k)
+    
+    @staticmethod
+    def is_milvus_available() -> bool:
+        """检查Milvus Lite是否可用
+        
+        Returns:
+            Milvus Lite是否可用
+        """
+        return MilvusClient is not None
+        try:
+            # 这里是向量存储的占位实现
+            # 实际项目中应替换为真正的Milvus Lite实现
+            # 保存向量信息到JSON文件作为临时存储
+            向量存储文件 = f"向量存储_{集合名称}.json"
+            向量数据 = JsonHandler.读取Json字典(向量存储文件)
+            
+            # 存储向量数据
+            向量数据[dataID] = {
+                "向量": 向量,
+                "元数据": 元数据 or {},
+                "时间戳": datetime.datetime.now().isoformat()
+            }
+            
+            # 保存到文件
+            文件路径 = JsonHandler.获取文件路径(向量存储文件, True)
+            with open(文件路径, 'w', encoding='utf-8') as f:
+                json.dump(向量数据, f, ensure_ascii=False, indent=2)
+            
+            return dataID
+        except Exception as e:
+            print(f"存储向量数据时出错: {e}")
+            return None
+    
+    @staticmethod
+    def 搜索相似向量(集合名称: str, 查询向量: list, 限制数量: int = 5) -> list:
+        """搜索相似向量
+        
+        Args:
+            集合名称: 向量集合名称
+            查询向量: 查询向量数据
+            限制数量: 返回结果数量限制
+            
+        Returns:
+            相似向量结果列表
+        """
+        try:
+            # 这里是向量搜索的占位实现
+            # 实际项目中应替换为真正的Milvus Lite实现
+            向量存储文件 = f"向量存储_{集合名称}.json"
+            向量数据 = JsonHandler.读取Json字典(向量存储文件)
+            
+            # 计算相似度（使用简单的欧几里得距离）
+            结果 = []
+            for 数据ID, 项目 in 向量数据.items():
+                向量 = 项目.get("向量", [])
+                if len(向量) != len(查询向量):
+                    continue
+                
+                # 简单的欧几里得距离计算
+                距离 = sum((a - b) ** 2 for a, b in zip(查询向量, 向量)) ** 0.5
+                结果.append((数据ID, 1 / (1 + 距离), 项目.get("元数据", {})))
+            
+            # 按相似度排序并返回
+            结果.sort(key=lambda x: x[1], reverse=True)
+            return [
+                {"id": item[0], "score": item[1], "metadata": item[2]}
+                for item in 结果[:限制数量]
+            ]
+        except Exception as e:
+            print(f"搜索相似向量时出错: {e}")
+            return []
+    
+    @staticmethod
+    def is_milvus_available() -> bool:
+        """检查Milvus Lite是否可用
+        
+        Returns:
+            Milvus Lite是否可用
+        """
+        # 占位实现，实际项目中应检查Milvus Lite客户端是否可用
+        try:
+            # 尝试导入Milvus相关模块
+            import pymilvus
+            return True
+        except ImportError:
             return False
 
 # 创建别名方便使用
 Json = JsonHandler
+
+# 数据库处理模块
+class DatabaseHandler:
+    _instance = None
+    _db_path = None
+    _milvus_client = None
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(DatabaseHandler, cls).__new__(cls)
+            # 初始化数据库路径
+            项目根目录 = Path(__file__).parent
+            cls._db_path = str(项目根目录 / "UserData" / "plugin_data.db")
+            # 确保UserData目录存在
+            os.makedirs(str(项目根目录 / "UserData"), exist_ok=True)
+            # 初始化数据库
+            cls._instance._init_database()
+            # 初始化Milvus Lite（如果可用）
+            cls._instance._init_milvus()
+        return cls._instance
+    
+    def _init_database(self):
+        """初始化数据库表结构"""
+        try:
+            conn = sqlite3.connect(self._db_path)
+            cursor = conn.cursor()
+            
+            # 创建数据表，对应原来的JSON文件
+            # 通用键值对表，用于存储简单的键值对数据
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS key_value_store (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_name TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(file_name, key)
+            )
+            ''')
+            
+            # 创建复杂数据存储表，用于存储抽奖数据等复杂结构
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS complex_data_store (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_name TEXT NOT NULL,
+                data_key TEXT NOT NULL,
+                data TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(file_name, data_key)
+            )
+            ''')
+            
+            # 创建向量数据映射表，用于关联普通数据和向量数据
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS vector_data_mapping (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                collection_name TEXT NOT NULL,
+                data_id TEXT NOT NULL,
+                milvus_id TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(collection_name, data_id)
+            )
+            ''')
+            
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.error(f"初始化数据库失败: {e}")
+    
+    def _init_milvus(self):
+        """初始化Milvus Lite客户端"""
+        try:
+            if MilvusClient is not None:
+                # 创建Milvus Lite数据库文件
+                项目根目录 = Path(__file__).parent
+                milvus_db_path = str(项目根目录 / "UserData" / "milvus_data.db")
+                self._milvus_client = MilvusClient(milvus_db_path)
+                logger.info(f"成功初始化Milvus Lite，数据库路径: {milvus_db_path}")
+                
+                # 创建默认的向量集合
+                default_collections = [
+                    {"name": "conversations", "dimension": 768},
+                    {"name": "game_data", "dimension": 768}
+                ]
+                
+                for collection in default_collections:
+                    if not self._milvus_client.has_collection(collection["name"]):
+                        self._milvus_client.create_collection(
+                            collection_name=collection["name"],
+                            dimension=collection["dimension"]
+                        )
+                        logger.info(f"创建向量集合: {collection['name']}")
+        except Exception as e:
+            logger.error(f"初始化Milvus Lite失败: {e}")
+            milvus_db_path = str(项目根目录 / "UserData" / "milvus_data.db")
+            self._milvus_client = MilvusClient(milvus_db_path)
+            logger.info(f"成功初始化Milvus Lite: {milvus_db_path}")
+                
+             # 创建默认集合（如果不存在）
+            self._create_default_collections()
+            
+            logger.info("Milvus Lite未启用，使用SQLite作为替代")
+            
+        except Exception as e:
+            logger.error(f"初始化Milvus Lite失败: {e}")
+            self._milvus_client = None
+    
+    def _create_default_collections(self):
+        """创建默认的向量集合"""
+        if self._milvus_client is None:
+            return
+        
+        try:
+            # 创建对话记忆集合
+            if not self._milvus_client.has_collection("conversations"):
+                self._milvus_client.create_collection(
+                    collection_name="conversations",
+                    dimension=768,  # 默认使用768维向量，可根据实际embedding模型调整
+                    primary_field_name="id",
+                    vector_field_name="embedding"
+                )
+                logger.info("创建对话记忆向量集合成功")
+            
+            # 创建游戏数据集合
+            if not self._milvus_client.has_collection("game_data"):
+                self._milvus_client.create_collection(
+                    collection_name="game_data",
+                    dimension=768,
+                    primary_field_name="id",
+                    vector_field_name="embedding"
+                )
+                logger.info("创建游戏数据向量集合成功")
+        except Exception as e:
+            logger.error(f"创建向量集合失败: {e}")
+    
+    def insert_vector(self, collection_name, data_id, vector, metadata=None):
+        """插入向量数据"""
+        if self._milvus_client is None:
+            logger.warning("Milvus Lite不可用，无法插入向量数据")
+            return None
+        
+        try:
+            # 确保集合存在
+            if not self._milvus_client.has_collection(collection_name):
+                self._milvus_client.create_collection(
+                    collection_name=collection_name,
+                    dimension=len(vector),
+                    primary_field_name="id",
+                    vector_field_name="embedding"
+                )
+                logger.info(f"创建集合 {collection_name} 成功")
+            
+            # 准备数据
+            insert_data = {
+                "id": f"{collection_name}_{data_id}_{int(time.time())}",
+                "embedding": vector,
+                "data_id": data_id
+            }
+            
+            # 添加元数据
+            if metadata:
+                insert_data.update(metadata)
+            
+            # 插入向量
+            result = self._milvus_client.insert(
+                collection_name=collection_name,
+                data=[insert_data]
+            )
+            
+            # 保存映射关系
+            if result.get("insert_count") == 1:
+                milvus_id = insert_data["id"]
+                self._save_vector_mapping(collection_name, data_id, milvus_id)
+                return milvus_id
+            
+            return None
+        except Exception as e:
+            logger.error(f"插入向量数据失败: {e}")
+            return None
+    
+    def search_vectors(self, collection_name, query_vector, limit=5):
+        """搜索相似向量"""
+        if self._milvus_client is None:
+            logger.warning("Milvus Lite不可用，无法搜索向量数据")
+            return []
+        
+        try:
+            if not self._milvus_client.has_collection(collection_name):
+                return []
+            
+            # 执行向量搜索
+            results = self._milvus_client.search(
+                collection_name=collection_name,
+                data=[query_vector],
+                limit=limit,
+                output_fields=["data_id"]
+            )
+            
+            return results[0] if results else []
+        except Exception as e:
+            logger.error(f"搜索向量数据失败: {e}")
+            return []
+    
+    def save_key_value(self, file_name, key, value):
+        """保存键值对数据到数据库"""
+        try:
+            conn = sqlite3.connect(self._db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute(
+                "INSERT OR REPLACE INTO key_value_store (file_name, key, value) VALUES (?, ?, ?)",
+                (file_name, key, value)
+            )
+            
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            logger.error(f"保存键值对失败: {e}")
+            return False
+    
+    def get_key_value(self, file_name, key):
+        """从数据库获取键值对"""
+        try:
+            conn = sqlite3.connect(self._db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute(
+                "SELECT value FROM key_value_store WHERE file_name = ? AND key = ?",
+                (file_name, key)
+            )
+            
+            result = cursor.fetchone()
+            conn.close()
+            
+            return result[0] if result else None
+        except Exception as e:
+            logger.error(f"获取键值对失败: {e}")
+            return None
+    
+    def get_all_key_values(self, file_name):
+        """获取指定文件的所有键值对"""
+        try:
+            conn = sqlite3.connect(self._db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute(
+                "SELECT key, value FROM key_value_store WHERE file_name = ?",
+                (file_name,)
+            )
+            
+            result = cursor.fetchall()
+            conn.close()
+            
+            return result
+        except Exception as e:
+            logger.error(f"获取所有键值对失败: {e}")
+            return []
+    
+    def save_complex_data(self, file_name, data_key, data):
+        """保存复杂数据到数据库"""
+        try:
+            conn = sqlite3.connect(self._db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute(
+                "INSERT OR REPLACE INTO complex_data_store (file_name, data_key, data) VALUES (?, ?, ?)",
+                (file_name, data_key, data)
+            )
+            
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            logger.error(f"保存复杂数据失败: {e}")
+            return False
+    
+    def get_complex_data(self, file_name, data_key):
+        """从数据库获取复杂数据"""
+        try:
+            conn = sqlite3.connect(self._db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute(
+                "SELECT data FROM complex_data_store WHERE file_name = ? AND data_key = ?",
+                (file_name, data_key)
+            )
+            
+            result = cursor.fetchone()
+            conn.close()
+            
+            return result[0] if result else None
+        except Exception as e:
+            logger.error(f"获取复杂数据失败: {e}")
+            return None
+    
+    def store_vector(self, collection_name, data_id, vector, metadata=None):
+        """存储向量数据到Milvus Lite"""
+        try:
+            if self._milvus_client is None:
+                logger.warning("Milvus Lite客户端未初始化，无法存储向量")
+                return None
+            
+            # 确保集合存在
+            if not self._milvus_client.has_collection(collection_name):
+                # 默认为768维向量
+                self._milvus_client.create_collection(
+                    collection_name=collection_name,
+                    dimension=len(vector) if vector else 768
+                )
+                logger.info(f"创建新的向量集合: {collection_name}")
+            
+            # 准备数据
+            data = {
+                "id": data_id,
+                "vector": vector,
+                "metadata": metadata or {}
+            }
+            
+            # 插入向量
+            result = self._milvus_client.insert(
+                collection_name=collection_name,
+                data=[data]
+            )
+            
+            # 保存映射关系
+            if result.get("insert_count") == 1:
+                milvus_id = data_id  # 使用data_id作为milvus_id
+                self._save_vector_mapping(collection_name, data_id, milvus_id)
+                return milvus_id
+            
+            return None
+        except Exception as e:
+            logger.error(f"存储向量数据失败: {e}")
+            return None
+    
+    def search_vectors(self, collection_name, query_vector, top_k=5):
+        """搜索相似向量"""
+        try:
+            if self._milvus_client is None:
+                logger.warning("Milvus Lite客户端未初始化，无法搜索向量")
+                return []
+            
+            if not self._milvus_client.has_collection(collection_name):
+                logger.warning(f"向量集合不存在: {collection_name}")
+                return []
+            
+            # 搜索向量
+            results = self._milvus_client.search(
+                collection_name=collection_name,
+                data=[query_vector],
+                limit=top_k,
+                search_params={"metric_type": "COSINE"}
+            )
+            
+            # 处理结果
+            search_results = []
+            for result in results[0]:
+                search_results.append({
+                    "id": result.get("id"),
+                    "distance": result.get("distance"),
+                    "metadata": result.get("entity", {}).get("metadata", {})
+                })
+            
+            return search_results
+        except Exception as e:
+            logger.error(f"搜索向量失败: {e}")
+            return []
+    
+    def _save_vector_mapping(self, collection_name, data_id, milvus_id):
+        """保存向量映射关系"""
+        try:
+            conn = sqlite3.connect(self._db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute(
+                "INSERT OR REPLACE INTO vector_data_mapping (collection_name, data_id, milvus_id) VALUES (?, ?, ?)",
+                (collection_name, data_id, milvus_id)
+            )
+            
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.error(f"保存向量映射关系失败: {e}")
+
+# 创建数据库处理实例
+db_handler = DatabaseHandler()
+
+def migrate_json_to_database():
+    """将UserData目录下的所有JSON文件数据迁移到数据库中"""
+    try:
+        logger.info("开始从JSON文件迁移数据到数据库...")
+        
+        # 获取UserData目录路径
+        项目根目录 = Path(__file__).parent
+        用户数据目录 = 项目根目录 / "UserData"
+        
+        # 确保UserData目录存在
+        if not 用户数据目录.exists():
+            logger.warning("UserData目录不存在，跳过数据迁移")
+            return
+        
+        # 获取目录下所有JSON文件
+        json_files = list(用户数据目录.glob("*.json"))
+        migrated_count = 0
+        failed_count = 0
+        
+        logger.info(f"找到 {len(json_files)} 个JSON文件需要迁移")
+        
+        for json_file in json_files:
+            文件名称 = json_file.name
+            logger.info(f"正在迁移文件: {文件名称}")
+            
+            try:
+                # 读取JSON文件内容
+                with open(json_file, 'r', encoding='utf-8') as f:
+                    file_content = f.read().strip()
+                    
+                # 检查文件是否为空
+                if not file_content:
+                    logger.warning(f"文件为空: {文件名称}")
+                    continue
+                
+                # 解析JSON数据
+                data = json.loads(file_content)
+                
+                # 验证数据格式是否为字典
+                if not isinstance(data, dict):
+                    logger.error(f"文件格式错误，不是有效的JSON字典: {文件名称}")
+                    failed_count += 1
+                    continue
+                
+                # 对于复杂数据结构（如抽奖数据），使用复杂数据存储表
+                # 对于简单的键值对，使用键值对存储表
+                
+                # 判断是否为复杂数据
+                is_complex_data = any(isinstance(v, (dict, list)) for v in data.values())
+                
+                if is_complex_data:
+                    # 复杂数据直接存储整个JSON字符串
+                    db_handler.save_complex_data(文件名称, "完整数据", json.dumps(data, ensure_ascii=False))
+                else:
+                    # 简单键值对，逐个存储
+                    for key, value in data.items():
+                        db_handler.save_key_value(文件名称, key, str(value))
+                
+                migrated_count += 1
+                logger.info(f"成功迁移文件: {文件名称}")
+                
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON解析错误 ({文件名称}): {e}")
+                failed_count += 1
+            except Exception as e:
+                logger.error(f"迁移文件失败 ({文件名称}): {e}")
+                failed_count += 1
+        
+        logger.info(f"数据迁移完成! 成功: {migrated_count}, 失败: {failed_count}")
+        
+    except Exception as e:
+        logger.error(f"数据迁移过程中发生错误: {e}")
+
+# 在插件启动时执行数据迁移
+migrate_json_to_database()
 
 # 邮件服务模块
 class EmailService:
