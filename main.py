@@ -1983,25 +1983,25 @@ class MyPlugin(Star):
                     logger.error(f"备用方案也失败: {backup_error}")
 
         # 安全获取项目ID和奖励字符串
-                    项目ID = self.game_configs.get(数据.get('游戏名称', ''), {}).get('项目ID', '')
+        项目ID = self.game_configs.get(数据.get('游戏名称', ''), {}).get('项目ID', '')
 
-                    # 安全获取奖励字符串，避免'发送的奖励'键不存在的错误
-                    游戏名称 = 数据.get('游戏名称', '')
-                    奖励数量 = data.get('奖励数量', 1)
-                    
-                    # 优化奖励字符串构建：优先从游戏配置获取基础奖励字符串
-                    奖励基础字符串 = ""
-                    # 首先从game_configs获取奖励配置
-                    if 游戏名称 in self.game_configs:
-                        奖励基础字符串 = self.game_configs[游戏名称].get('发送的奖励', '')
-                    
-                    # 如果game_configs中没有，再尝试从抽奖数据列表获取
-                    if not 奖励基础字符串 and hasattr(self, '抽奖数据列表') and isinstance(self.抽奖数据列表, dict):
-                        游戏配置 = self.抽奖数据列表.get(游戏名称, {})
-                        奖励基础字符串 = 游戏配置.get('发送的奖励', '')
-                    
-                    # 正确构建奖励字符串，确保格式为"$p_95jd.lobby_resource.魂晶.root:999"（根据实际数量）
-                    奖励字符串 = f"{奖励基础字符串}:{奖励数量}" if 奖励基础字符串 else ""
+        # 安全获取奖励字符串，避免'发送的奖励'键不存在的错误
+        游戏名称 = 数据.get('游戏名称', '')
+        奖励数量 = 数据.get('奖励数量', 1)
+        
+        # 优化奖励字符串构建：优先从游戏配置获取基础奖励字符串
+        奖励基础字符串 = ""
+        # 首先从game_configs获取奖励配置
+        if 游戏名称 in self.game_configs:
+            奖励基础字符串 = self.game_configs[游戏名称].get('发送的奖励', '')
+        
+        # 如果game_configs中没有，再尝试从抽奖数据列表获取
+        if not 奖励基础字符串 and hasattr(self, '抽奖数据列表') and isinstance(self.抽奖数据列表, dict):
+            游戏配置 = self.抽奖数据列表.get(游戏名称, {})
+            奖励基础字符串 = 游戏配置.get('发送的奖励', '')
+        
+        # 正确构建奖励字符串，确保格式为"$p_95jd.lobby_resource.魂晶.root:999"（根据实际数量）
+        奖励字符串 = f"{奖励基础字符串}:{奖励数量}" if 奖励基础字符串 else ""
 
         for 获奖者ID in 获奖者:
             #发送奖励邮件
