@@ -233,6 +233,9 @@ class EmailService:
             
             # 第二步：触发发送
             row_id = add_result.get('row_id')
+            response_structure = add_result.get('response_structure', [])
+            raw_response = add_result.get('raw_response', '')
+            
             if row_id:
                 # 调用触发发送方法
                 trigger_result = self._trigger_email_send(row_id)
@@ -254,7 +257,59 @@ class EmailService:
                         "email_added": True
                     }
             else:
-                return {"success": False, "message": "未获取到邮件行ID", "error_code": "NO_ROW_ID"}
+                # 未获取到row_id时的增强错误处理
+                error_msg = f"未获取到邮件行ID，响应结构: {response_structure}"
+                print(f"发送邮件失败: {error_msg}")
+                print(f"原始响应内容: {raw_response}")
+                
+                # 尝试从原始响应中直接提取row_id
+                try:
+                    # 如果原始响应是JSON格式，尝试直接解析
+                    import json
+                    if raw_response.strip().startswith('{'):
+                        raw_json = json.loads(raw_response)
+                        # 尝试多种可能的路径
+                        if isinstance(raw_json, dict):
+                            # 尝试常见的数据路径
+                            if 'data' in raw_json and isinstance(raw_json['data'], dict):
+                                for key in ['row_id', 'id', 'rowId']:
+                                    if key in raw_json['data']:
+                                        row_id = raw_json['data'][key]
+                                        print(f"从原始响应中成功提取到row_id: {row_id}")
+                                        # 尝试使用提取到的row_id触发发送
+                                        trigger_result = self._trigger_email_send(row_id)
+                                        if trigger_result.get("success"):
+                                            return {
+                                                "success": True,
+                                                "message": "邮件发送成功(从原始响应中提取row_id)",
+                                                "row_id": row_id,
+                                                "trigger_result": trigger_result
+                                            }
+                            # 直接在根对象中查找
+                            for key in ['row_id', 'id', 'rowId']:
+                                if key in raw_json:
+                                    row_id = raw_json[key]
+                                    print(f"从原始响应根对象中成功提取到row_id: {row_id}")
+                                    # 尝试使用提取到的row_id触发发送
+                                    trigger_result = self._trigger_email_send(row_id)
+                                    if trigger_result.get("success"):
+                                        return {
+                                            "success": True,
+                                            "message": "邮件发送成功(从原始响应根对象中提取row_id)",
+                                            "row_id": row_id,
+                                            "trigger_result": trigger_result
+                                        }
+                except Exception as parse_error:
+                    print(f"解析原始响应异常: {str(parse_error)}")
+                
+                # 所有尝试都失败，返回详细的错误信息
+                return {
+                    "success": False, 
+                    "message": error_msg,
+                    "error_code": "NO_ROW_ID",
+                    "response_structure": response_structure,
+                    "raw_response_preview": raw_response[:200] + '...' if len(raw_response) > 200 else raw_response
+                }
             
         except requests.RequestException as e:
             error_msg = f"网络请求异常: {str(e)}"
@@ -1034,9 +1089,23 @@ class MyPlugin(Star):
                 logger.info(f"奖励邮件发送成功: {发送的用户}")
                 return True
             else:
-                logger.error(f"奖励邮件发送失败: {发送的用户}, 原因: {result.get('message')}")
+                # 获取错误信息，特别处理"未获取到邮件行ID"的情况
+                error_msg = result.get('message')
+                detailed_error = error_msg
+                
+                # 如果是NO_ROW_ID错误，收集更详细的错误信息
+                if result.get('error_code') == 'NO_ROW_ID':
+                    response_structure = result.get('response_structure', [])
+                    raw_response_preview = result.get('raw_response_preview', '')
+                    detailed_error = f"{error_msg}，响应结构: {response_structure}"
+                    if raw_response_preview:
+                        detailed_error += f"，原始响应预览: {raw_response_preview}"
+                    
+                    logger.error(f"邮件行ID提取失败: {detailed_error}")
+                
+                logger.error(f"奖励邮件发送失败: {发送的用户}, 原因: {detailed_error}")
                 # 记录失败信息
-                self._log_email_failure(发送的用户, 奖励内容, result.get('message'))
+                self._log_email_failure(发送的用户, 奖励内容, detailed_error)
                 return False
         except requests.RequestException as e:
             error_msg = f"发送奖励邮件网络异常: {str(e)}"
