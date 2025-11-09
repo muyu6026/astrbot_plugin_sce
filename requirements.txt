@@ -1,3 +1,0 @@
-# 项目依赖
-requests>=2.25.1
-pymilvus[milvus_lite]>=2.4.0  # 必须使用Milvus Lite作为向量数据库  # Milvus Lite 向量数据库支持
