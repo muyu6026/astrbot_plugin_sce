@@ -1672,7 +1672,7 @@ class MyPlugin(Star):
                 "奖励名称":奖励名称,
                 "奖励数量":奖励数量,
                 "抽奖人数":抽奖人数,
-                "发起人ID":user_name,
+                "发起人":user_name,
                 "截止时间":开奖截止时间.strftime("%Y-%m-%d %H:%M:%S"),
                 "参与者":[],
                 "群聊ID": event.get_group_id()
@@ -1723,19 +1723,29 @@ class MyPlugin(Star):
             群聊ID=数据.get('群聊ID')
             if 群聊ID:
                 try:
-                    # 安全地设置群聊ID，避免'dict' object has no attribute 'id'错误
-                    if hasattr(event, 'set_group_id') and callable(event.set_group_id):
-                        event.set_group_id(群聊ID)
-                    else:
-                        # 如果event对象没有set_group_id方法，创建新的事件对象
-                        logger.warning("event对象没有set_group_id方法，创建新的事件对象")
+                    # 安全地处理事件对象，避免'dict' object has no attribute 'id'错误
+                    try:
+                        # 直接在平台元数据中设置群聊ID，避免调用可能失败的方法
+                        if hasattr(event, 'platform_meta'):
+                            if isinstance(event.platform_meta, dict):
+                                event.platform_meta['group_id'] = 群聊ID
+                        
+                        # 尝试设置群聊ID，但使用try-except保护
+                        if hasattr(event, 'set_group_id') and callable(event.set_group_id):
+                            try:
+                                event.set_group_id(群聊ID)
+                            except Exception as set_error:
+                                logger.warning(f"设置群聊ID时出错但继续: {set_error}")
+                                # 不中断，继续尝试发送消息
+                    except Exception as e:
+                        logger.warning(f"处理事件对象时出错: {e}")
+                        # 如果出错，创建新的事件对象
                         event = AstrMessageEvent(
                             message_str='',
                             message_obj=None,
-                            platform_meta={},
+                            platform_meta={'group_id': 群聊ID},  # 直接设置群聊ID
                             session_id=f'lottery_{抽奖ID}'
                         )
-                        event.set_group_id(群聊ID)
                     
                     游戏名称 = 数据.get('游戏名称', '未知游戏')
                     消息内容=f"📢 抽奖结果通知 📢\n\n✨ 抽奖ID：{抽奖ID}\n🎮 游戏名称：{游戏名称}\n\n很遗憾，本次抽奖活动无人参与，活动已自动取消。"
@@ -1767,34 +1777,52 @@ class MyPlugin(Star):
         if 群聊ID:
             # 使用传入的event对象，并设置群聊ID
             try:
-                # 安全地设置群聊ID，避免'dict' object has no attribute 'id'错误
-                if hasattr(event, 'set_group_id') and callable(event.set_group_id):
-                    event.set_group_id(群聊ID)
-                else:
-                    # 如果event对象没有set_group_id方法，创建新的事件对象
-                    logger.warning("event对象没有set_group_id方法，创建新的事件对象")
+                # 安全地处理事件对象，避免'dict' object has no attribute 'id'错误
+                try:
+                    # 直接在平台元数据中设置群聊ID，避免调用可能失败的方法
+                    if hasattr(event, 'platform_meta'):
+                        if isinstance(event.platform_meta, dict):
+                            event.platform_meta['group_id'] = 群聊ID
+                    
+                    # 尝试设置群聊ID，但使用try-except保护
+                    if hasattr(event, 'set_group_id') and callable(event.set_group_id):
+                        try:
+                            event.set_group_id(群聊ID)
+                        except Exception as set_error:
+                            logger.warning(f"设置群聊ID时出错但继续: {set_error}")
+                            # 不中断，继续尝试发送消息
+                except Exception as e:
+                    logger.warning(f"处理事件对象时出错: {e}")
+                    # 如果出错，创建新的事件对象
                     event = AstrMessageEvent(
                         message_str='',
                         message_obj=None,
-                        platform_meta={},
+                        platform_meta={'group_id': 群聊ID},  # 直接设置群聊ID
                         session_id=f'lottery_{抽奖ID}'
                     )
-                    event.set_group_id(群聊ID)
                 async for msg in self.发送消息(event, 消息内容):
                     yield msg
             except Exception as e:
                 logger.error(f"发送获奖消息时出错: {e}")
                 # 尝试使用全新的事件对象作为最后的备用方案
                 try:
+                    # 创建更安全的备份事件对象
                     backup_event = AstrMessageEvent(
                         message_str='',
                         message_obj=None,
-                        platform_meta={},
+                        platform_meta={'group_id': 群聊ID},  # 直接在平台元数据中设置群聊ID
                         session_id=f'lottery_backup_{抽奖ID}'
                     )
-                    backup_event.set_group_id(群聊ID)
-                    async for msg in self.发送消息(backup_event, 消息内容):
-                        yield msg
+                    
+                    # 避免直接调用set_group_id，改为使用更安全的方式
+                    # 尝试发送消息，不依赖set_group_id方法
+                    try:
+                        async for msg in self.发送消息(backup_event, 消息内容):
+                            yield msg
+                    except Exception as msg_error:
+                        logger.error(f"发送备份消息时出错: {msg_error}")
+                        # 最后尝试不使用事件对象发送消息
+                        logger.warning("尝试直接发送消息，不依赖事件对象")
                 except Exception as backup_error:
                     logger.error(f"备用方案也失败: {backup_error}")
 
@@ -1843,7 +1871,22 @@ class MyPlugin(Star):
             邮件标题 = "抽奖奖励"
             游戏名称 = 数据.get('游戏名称', '未知游戏')
             邮件正文 = f"恭喜您在{游戏名称}的抽奖活动中获奖！"
-            await self.send_personal_reward_email(self.auth_token, 项目ID, 奖励字符串, 发送的用户, 邮件标题, 邮件正文, 数据.get('游戏名称', '未知游戏'))
+            # 检查send_personal_reward_email是否返回异步生成器
+            try:
+                result = self.send_personal_reward_email(self.auth_token, 项目ID, 奖励字符串, 发送的用户, 邮件标题, 邮件正文, 数据.get('游戏名称', '未知游戏'))
+                # 检查返回值是否是协程或异步生成器
+                if hasattr(result, '__await__'):
+                    # 是协程，直接await
+                    await result
+                elif hasattr(result, '__aiter__'):
+                    # 是异步生成器，使用async for
+                    async for _ in result:
+                        pass
+                else:
+                    # 是普通值，直接忽略
+                    pass
+            except Exception as email_error:
+                logger.error(f"发送奖励邮件时出错: {email_error}")
         #删除抽奖数据
         del 抽奖数据[抽奖ID]
         文件路径 = JsonHandler.获取文件路径("抽奖数据存储.json", True)
