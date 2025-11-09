@@ -129,11 +129,20 @@ class EmailService:
         self.send_email_url = "https://adminapi-pd.spark.xd.com/api/v1/table/row"
         self.table_id = "firm0_app_email_manager"
         self.session = requests.Session()
+        self.max_retries = 2  # 遇到401时的重试次数
         # 设置默认请求头
+        self._update_auth_headers(auth_token)
+    
+    def _update_auth_headers(self, token):
+        """更新认证头信息"""
+        self.auth_token = token
         self.session.headers.update({
-            "Cookie": f"token={auth_token}",
-            "Content-Type": "application/json"
+            "Cookie": f"token={token}",
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}"  # 增加Authorization头
         })
+        # 同时更新session的cookies
+        self.session.cookies.set('token', token)
     
     def _trigger_email_send(self, row_id):
         """
@@ -192,15 +201,34 @@ class EmailService:
             dict: 发送结果
         """
         try:
+            print(f"准备发送邮件: {email_data.get('标题', '无标题')}")
+            print(f"目标类型: {email_data.get('目标类型', 1)}，收件人ID: {email_data.get('收件人ID', '全体')}")
+            
+            # 先验证token是否存在
+            if not self.auth_token:
+                error_msg = "认证token为空，请先设置有效的token"
+                print(error_msg)
+                return {"success": False, "message": error_msg, "error_code": "TOKEN_EMPTY"}
+            
             # 第一步：添加邮件到系统
             add_result = self._add_email(email_data)
             print(f"添加邮件结果: {add_result}")
             
+            # 检查是否是401错误
+            if add_result and "401 Unauthorized" in add_result.get("message", ""):
+                print("检测到401未授权错误，可能需要刷新token")
+                return {
+                    "success": False, 
+                    "message": add_result.get("message"),
+                    "error_code": "TOKEN_EXPIRED",
+                    "need_refresh": True
+                }
+            
             if not add_result:
-                return {"success": False, "message": "添加邮件失败: 未收到响应"}
+                return {"success": False, "message": "添加邮件失败: 未收到响应", "error_code": "NO_RESPONSE"}
             if not add_result.get('success'):
                 error_message = add_result.get('message', '添加邮件失败')
-                return {"success": False, "message": error_message}
+                return {"success": False, "message": error_message, "error_code": "EMAIL_ADD_FAILED"}
             
             # 第二步：触发发送
             row_id = add_result.get('row_id')
@@ -209,21 +237,43 @@ class EmailService:
                 trigger_result = self._trigger_email_send(row_id)
                 print(f"触发发送结果: {trigger_result}")
                 
-                # 返回最终结果
-                return {
-                    "success": trigger_result.get('success', add_result.get('success')),
-                    "message": trigger_result.get('message', add_result.get('message')),
-                    "row_id": row_id
-                }
+                if trigger_result.get("success"):
+                    return {
+                        "success": True,
+                        "message": "邮件发送成功",
+                        "row_id": row_id,
+                        "trigger_result": trigger_result
+                    }
+                else:
+                    # 触发发送失败，但邮件已添加
+                    return {
+                        "success": False,
+                        "message": f"邮件添加成功但触发发送失败: {trigger_result.get('message')}",
+                        "row_id": row_id,
+                        "email_added": True
+                    }
             else:
-                return {"success": False, "message": "未获取到邮件行ID"}
+                return {"success": False, "message": "未获取到邮件行ID", "error_code": "NO_ROW_ID"}
             
+        except requests.RequestException as e:
+            error_msg = f"网络请求异常: {str(e)}"
+            print(error_msg)
+            if hasattr(e, 'response') and e.response is not None:
+                # 检查是否是401错误
+                if e.response.status_code == 401:
+                    return {
+                        "success": False,
+                        "message": f"401未授权错误: {str(e)}",
+                        "error_code": "TOKEN_EXPIRED",
+                        "need_refresh": True
+                    }
+            return {"success": False, "message": error_msg, "error_code": "NETWORK_ERROR"}
         except Exception as e:
             error_msg = f"发送邮件异常: {str(e)}"
             print(error_msg)
             import traceback
             print(f"异常堆栈: {traceback.format_exc()}")
-            return {"success": False, "message": error_msg}
+            return {"success": False, "message": error_msg, "error_code": "INTERNAL_ERROR"}
     
     def quick_send(self, title, content, recipient_id, item_id=0, item_count=0, money=0, attachment=""):
         """
@@ -301,11 +351,8 @@ class EmailService:
         Returns:
             dict: 添加结果
         """
-        try:
-            print(f"准备添加邮件到系统")
-            print(f"原始邮件数据: {email_data}")
-            
-            # 构建符合C#代码的请求数据
+        # 准备请求数据（提取为独立函数避免重复代码）
+        def prepare_request_data():
             import time
             current_time_ms = int(time.time() * 1000)
             
@@ -334,51 +381,126 @@ class EmailService:
                 "payload": payload
             }
             
-            print(f"准备发送邮件请求到: {self.add_email_url}")
-            print(f"请求数据: {json.dumps(request_data, ensure_ascii=False)}")
-            
-            response = self.session.post(self.add_email_url, data=json.dumps(request_data))
-            print(f"邮件服务响应状态码: {response.status_code}")
-            print(f"邮件服务响应内容: {response.text}")
-            
-            if response.status_code == 200:
-                try:
-                    result = response.json()
-                    print(f"响应解析结果: {result}")
-                    
-                    # 返回统一格式的结果
-                    success = result.get("result") == 0
-                    row_id = None
-                    if success and result.get("data"):
-                        row_id = result["data"].get("row_id")
-                    
-                    return {
-                        "success": success,
-                        "message": result.get("msg", "未知响应"),
-                        "row_id": row_id,
-                        "raw_response": response.text
-                    }
-                except json.JSONDecodeError:
-                    error_msg = f"响应解析失败: {response.text}"
-                    print(error_msg)
-                    return {"success": False, "message": error_msg}
-            else:
-                error_msg = f"HTTP错误: {response.status_code} {response.reason}"
-                print(error_msg)
-                return {"success": False, "message": error_msg, "response": response.text}
+            return request_data
+        
+        # 执行请求（带重试逻辑）
+        for attempt in range(self.max_retries + 1):
+            try:
+                print(f"准备添加邮件到系统 (尝试 {attempt + 1}/{self.max_retries + 1})")
+                print(f"原始邮件数据: {email_data}")
                 
-        except requests.RequestException as e:
-            error_msg = f"HTTP请求错误: {str(e)}"
-            print(error_msg)
-            if hasattr(e, 'response') and e.response is not None:
-                error_msg += f", 状态码: {e.response.status_code}, 响应: {e.response.text}"
-            return {"success": False, "message": error_msg}
-        except Exception as e:
-            error_msg = f"添加邮件异常: {str(e)}"
-            print(error_msg)
-            import traceback
-            print(f"异常堆栈: {traceback.format_exc()}")
-            return {"success": False, "message": error_msg}
+                request_data = prepare_request_data()
+                
+                print(f"准备发送邮件请求到: {self.add_email_url}")
+                print(f"请求数据: {json.dumps(request_data, ensure_ascii=False)}")
+                print(f"当前使用的token: {self.auth_token[:20]}...{self.auth_token[-8:]}")
+                
+                response = self.session.post(
+                    self.add_email_url, 
+                    data=json.dumps(request_data),
+                    timeout=30  # 添加超时设置
+                )
+                
+                print(f"邮件服务响应状态码: {response.status_code}")
+                print(f"邮件服务响应内容: {response.text}")
+                
+                # 处理401错误（需要刷新token）
+                if response.status_code == 401:
+                    print(f"收到401未授权错误，token可能已过期")
+                    
+                    # 如果是最后一次尝试，直接返回错误
+                    if attempt >= self.max_retries:
+                        error_msg = f"HTTP错误: 401 Unauthorized，已尝试刷新token但仍失败"
+                        print(error_msg)
+                        return {"success": False, "message": error_msg, "response": response.text}
+                    
+                    # 尝试刷新token（这里我们只能提示，实际刷新需要外部调用）
+                    print("需要刷新token，请使用刷新token命令或等待自动刷新")
+                    
+                    # 尝试从cookie中获取新token（如果有）
+                    if 'token' in self.session.cookies:
+                        new_token = self.session.cookies['token']
+                        if new_token and new_token != self.auth_token:
+                            print(f"从cookie中获取到新token")
+                            self._update_auth_headers(new_token)
+                            continue  # 重试请求
+                    
+                    # 添加延迟后重试
+                    print(f"等待2秒后重试...")
+                    import time
+                    time.sleep(2)
+                    continue
+                
+                # 处理其他状态码
+                if response.status_code == 200:
+                    try:
+                        result = response.json()
+                        print(f"响应解析结果: {result}")
+                        
+                        # 返回统一格式的结果
+                        success = result.get("result") == 0
+                        row_id = None
+                        if success and result.get("data"):
+                            row_id = result["data"].get("row_id")
+                        
+                        return {
+                            "success": success,
+                            "message": result.get("msg", "未知响应"),
+                            "row_id": row_id,
+                            "raw_response": response.text
+                        }
+                    except json.JSONDecodeError:
+                        error_msg = f"响应解析失败: {response.text}"
+                        print(error_msg)
+                        return {"success": False, "message": error_msg}
+                else:
+                    error_msg = f"HTTP错误: {response.status_code} {response.reason}"
+                    print(error_msg)
+                    return {"success": False, "message": error_msg, "response": response.text}
+                    
+            except requests.Timeout:
+                error_msg = f"请求超时 (尝试 {attempt + 1}/{self.max_retries + 1})"
+                print(error_msg)
+                if attempt >= self.max_retries:
+                    return {"success": False, "message": error_msg}
+                print("等待3秒后重试...")
+                import time
+                time.sleep(3)
+            except requests.ConnectionError:
+                error_msg = f"连接错误 (尝试 {attempt + 1}/{self.max_retries + 1})"
+                print(error_msg)
+                if attempt >= self.max_retries:
+                    return {"success": False, "message": error_msg}
+                print("等待3秒后重试...")
+                import time
+                time.sleep(3)
+            except requests.RequestException as e:
+                error_msg = f"HTTP请求错误: {str(e)} (尝试 {attempt + 1}/{self.max_retries + 1})"
+                print(error_msg)
+                if hasattr(e, 'response') and e.response is not None:
+                    error_msg += f", 状态码: {e.response.status_code}, 响应: {e.response.text}"
+                    # 检查是否是401错误
+                    if e.response.status_code == 401 and attempt < self.max_retries:
+                        print("401错误，需要刷新token")
+                        continue
+                if attempt >= self.max_retries:
+                    return {"success": False, "message": error_msg}
+                print("等待2秒后重试...")
+                import time
+                time.sleep(2)
+            except Exception as e:
+                error_msg = f"添加邮件异常: {str(e)} (尝试 {attempt + 1}/{self.max_retries + 1})"
+                print(error_msg)
+                import traceback
+                print(f"异常堆栈: {traceback.format_exc()}")
+                if attempt >= self.max_retries:
+                    return {"success": False, "message": error_msg}
+                print("等待2秒后重试...")
+                import time
+                time.sleep(2)
+        
+        # 所有尝试都失败
+        return {"success": False, "message": "所有尝试均失败，请检查token是否有效"}
 
 # 主程序功能整合
 @register("sce_spark_game", "开发者", "SCE星火游戏插件", "1.0.0")
@@ -840,25 +962,102 @@ class MyPlugin(Star):
                 if f"{display_name} x{count}" not in 邮件正文:
                     邮件正文 = f"{邮件正文}\n\n获得奖励：{display_name} x{count}"
             
-            # 使用存储的token发送邮件
+            # 先验证current_token是否有效
             token_to_use = self.current_token or 认证令牌
+            if not token_to_use or len(token_to_use) < 10:  # 简单的长度验证
+                print("警告: 当前token可能无效，尝试使用默认token")
+                token_to_use = self.auth_token
+            
             logger.info(f"使用存储的token发送邮件，token长度: {len(token_to_use)} 字符")
             
-            # 创建邮件服务并发送邮件
-            email_service = EmailService(token_to_use, 项目ID)
+            # 创建邮件服务并发送邮件（增加重试设置）
+            email_service = EmailService(token_to_use, 项目ID, max_retries=3)
             result = email_service.quick_send(邮件标题, 邮件正文, 发送的用户, attachment=attachment)
+            
+            # 检查是否是token相关错误
+            message = result.get('message', '')
+            if not result.get('success') and (message and ('token' in message.lower() or '认证' in message or '401' in message)):
+                print("检测到token过期或无效，尝试刷新token")
+                # 立即尝试刷新token
+                new_token = await self._refresh_all_games()
+                if new_token and self._is_token_valid(new_token):
+                    print(f"token刷新成功，新token: {new_token[:20]}...{new_token[-8:]}")
+                    # 使用新token重新发送邮件
+                    email_service = EmailService(
+                        auth_token=new_token,
+                        project_id=项目ID,
+                        max_retries=2
+                    )
+                    print("使用新token重新发送邮件...")
+                    result = email_service.quick_send(邮件标题, 邮件正文, 发送的用户, attachment=attachment)
+                    if result.get('success'):
+                        logger.info(f"使用新token奖励邮件发送成功: {发送的用户}")
+                        return True
+                    else:
+                        logger.error(f"使用新token后仍发送失败: {发送的用户}, 原因: {result.get('message')}")
+                        # 记录失败信息
+                        self._log_email_failure(发送的用户, 奖励内容, result.get('message'))
+                        return False
+                else:
+                    logger.error(f"token刷新失败")
+                    # 记录失败信息
+                    self._log_email_failure(发送的用户, 奖励内容, "Token刷新失败")
+                    return False
             
             if result.get('success'):
                 logger.info(f"奖励邮件发送成功: {发送的用户}")
                 return True
             else:
                 logger.error(f"奖励邮件发送失败: {发送的用户}, 原因: {result.get('message')}")
+                # 记录失败信息
+                self._log_email_failure(发送的用户, 奖励内容, result.get('message'))
                 return False
-        except Exception as e:
-            logger.error(f"发送奖励邮件时出错: {e}")
+        except requests.RequestException as e:
+            error_msg = f"发送奖励邮件网络异常: {str(e)}"
+            logger.error(error_msg)
             import traceback
             logger.error(f"异常堆栈: {traceback.format_exc()}")
+            self._log_email_failure(发送的用户, 奖励内容, error_msg)
             return False
+        except Exception as e:
+            error_msg = f"发送奖励邮件异常: {str(e)}"
+            logger.error(error_msg)
+            import traceback
+            logger.error(f"异常堆栈: {traceback.format_exc()}")
+            self._log_email_failure(发送的用户, 奖励内容, error_msg)
+            return False
+    
+    def _log_email_failure(self, user_id, reward_info, error_msg):
+        """
+        记录邮件发送失败信息
+        
+        Args:
+            user_id (str): 用户ID
+            reward_info (dict): 奖励信息
+            error_msg (str): 错误信息
+        """
+        import os
+        import datetime
+        
+        # 创建失败日志目录
+        log_dir = os.path.join(os.path.dirname(__file__), "logs")
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+        
+        # 日志文件名
+        log_file = os.path.join(log_dir, "email_failures.log")
+        
+        # 构建日志内容
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_entry = f"[{timestamp}] 用户: {user_id}, 奖励: {reward_info}, 错误: {error_msg}\n"
+        
+        # 写入日志文件
+        try:
+            with open(log_file, "a", encoding="utf-8") as f:
+                f.write(log_entry)
+            print(f"邮件发送失败信息已记录到: {log_file}")
+        except Exception as e:
+            print(f"记录失败日志异常: {str(e)}")
 
     @filter.command("签到")
     async def handle_checkin(self, event: AstrMessageEvent):
