@@ -864,13 +864,34 @@ class MyPlugin(Star):
             save_success = self._save_token(new_token)
             if save_success:
                 logger.info(f"成功保存新token")
+                return {
+                    "success": True,
+                    "token": new_token,
+                    "message": "成功刷新并保存新token"
+                }
             else:
                 logger.error(f"保存新token失败")
+                return {
+                    "success": False,
+                    "message": "找到新token但保存失败"
+                }
         else:
             logger.info("未发现新token，继续使用当前token")
+            # 即使没有找到新token，如果所有游戏刷新都成功了，也算刷新成功
+            if failure_count == 0:
+                return {
+                    "success": True,
+                    "token": self.current_token,
+                    "message": "所有游戏刷新成功，但未发现新token"
+                }
+            else:
+                return {
+                    "success": False,
+                    "message": f"部分游戏刷新失败，成功: {success_count}, 失败: {failure_count}"
+                }
         
         logger.info("所有游戏网页刷新完成")
-        return new_token
+        return {"success": False, "message": "未知错误"}
     
     async def _schedule_date_check(self):
         """定时任务：每分钟检查一次数据保质期"""
@@ -984,29 +1005,29 @@ class MyPlugin(Star):
             if not result.get('success') and (message and ('token' in message.lower() or '认证' in message or '401' in message)):
                 print("检测到token过期或无效，尝试刷新token")
                 # 立即尝试刷新token
-                new_token = await self._refresh_all_games()
-                if new_token and self._is_token_valid(new_token):
-                    print(f"token刷新成功，新token: {new_token[:20]}...{new_token[-8:]}")
-                    # 使用新token重新发送邮件
-                    email_service = EmailService(
-                        auth_token=new_token,
-                        project_id=项目ID,
-                        max_retries=2
-                    )
-                    print("使用新token重新发送邮件...")
-                    result = email_service.quick_send(邮件标题, 邮件正文, 发送的用户, attachment=attachment)
-                    if result.get('success'):
-                        logger.info(f"使用新token奖励邮件发送成功: {发送的用户}")
-                        return True
+                refresh_result = await self._refresh_all_games()
+                
+                # 处理新的返回格式
+                if isinstance(refresh_result, dict):
+                    if refresh_result.get("success"):
+                        new_token = refresh_result.get("token")
+                        if new_token and self._is_token_valid(new_token):
+                            print(f"token刷新成功，新token: {new_token[:20]}...{new_token[-8:]}")
+                            # 使用新token重新发送邮件
                     else:
-                        logger.error(f"使用新token后仍发送失败: {发送的用户}, 原因: {result.get('message')}")
+                        logger.error(f"token刷新失败: {refresh_result.get('message', '未知错误')}")
                         # 记录失败信息
-                        self._log_email_failure(发送的用户, 奖励内容, result.get('message'))
+                        self._log_email_failure(发送的用户, 奖励内容, "Token刷新失败: " + refresh_result.get('message', '未知错误'))
                         return False
+                # 向后兼容旧的返回格式（直接返回token字符串）
+                elif refresh_result and self._is_token_valid(refresh_result):
+                    new_token = refresh_result
+                    print(f"token刷新成功（旧格式），新token: {new_token[:20]}...{new_token[-8:]}")
+                    # 使用新token重新发送邮件
                 else:
-                    logger.error(f"token刷新失败")
+                    logger.error(f"token刷新失败: 返回值无效或为None")
                     # 记录失败信息
-                    self._log_email_failure(发送的用户, 奖励内容, "Token刷新失败")
+                    self._log_email_failure(发送的用户, 奖励内容, "Token刷新失败: 返回值无效")
                     return False
             
             if result.get('success'):
