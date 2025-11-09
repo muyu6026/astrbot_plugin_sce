@@ -1,6 +1,6 @@
-# helloworld
+# 星火小助手(astrbot_plugin_ sce)
 
-AstrBot 插件模板
+AstrBot 星火插件，非星火编辑器作者请勿下载
 
 A template plugin for AstrBot plugin feature
 
