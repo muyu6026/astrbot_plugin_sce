@@ -1722,11 +1722,27 @@ class MyPlugin(Star):
             # 发送未有人参与的消息
             群聊ID=数据.get('群聊ID')
             if 群聊ID:
-                event.set_group_id(群聊ID)
-                游戏名称 = 数据.get('游戏名称', '未知游戏')
-                消息内容=f"📢 抽奖结果通知 📢\n\n✨ 抽奖ID：{抽奖ID}\n🎮 游戏名称：{游戏名称}\n\n很遗憾，本次抽奖活动无人参与，活动已自动取消。"
-                async for msg in self.发送消息(event, 消息内容):
-                    yield msg
+                try:
+                    # 安全地设置群聊ID，避免'dict' object has no attribute 'id'错误
+                    if hasattr(event, 'set_group_id') and callable(event.set_group_id):
+                        event.set_group_id(群聊ID)
+                    else:
+                        # 如果event对象没有set_group_id方法，创建新的事件对象
+                        logger.warning("event对象没有set_group_id方法，创建新的事件对象")
+                        event = AstrMessageEvent(
+                            message_str='',
+                            message_obj=None,
+                            platform_meta={},
+                            session_id=f'lottery_{抽奖ID}'
+                        )
+                        event.set_group_id(群聊ID)
+                    
+                    游戏名称 = 数据.get('游戏名称', '未知游戏')
+                    消息内容=f"📢 抽奖结果通知 📢\n\n✨ 抽奖ID：{抽奖ID}\n🎮 游戏名称：{游戏名称}\n\n很遗憾，本次抽奖活动无人参与，活动已自动取消。"
+                    async for msg in self.发送消息(event, 消息内容):
+                        yield msg
+                except Exception as e:
+                    logger.error(f"发送无人参与消息时出错: {e}")
             return
         
         # 处理参与人数大于0的情况
@@ -1749,16 +1765,38 @@ class MyPlugin(Star):
         #假设有一个群聊ID存储在数据中
         群聊ID=数据.get('群聊ID')
         if 群聊ID:
-            # 为AstrMessageEvent构造函数提供所需的参数
-            event = AstrMessageEvent(
-                message_str='',
-                message_obj=None,
-                platform_meta={},
-                session_id=f'lottery_{抽奖ID}'
-            )
-            event.set_group_id(群聊ID)
-            async for msg in self.发送消息(event, 消息内容):
-                yield msg
+            # 使用传入的event对象，并设置群聊ID
+            try:
+                # 安全地设置群聊ID，避免'dict' object has no attribute 'id'错误
+                if hasattr(event, 'set_group_id') and callable(event.set_group_id):
+                    event.set_group_id(群聊ID)
+                else:
+                    # 如果event对象没有set_group_id方法，创建新的事件对象
+                    logger.warning("event对象没有set_group_id方法，创建新的事件对象")
+                    event = AstrMessageEvent(
+                        message_str='',
+                        message_obj=None,
+                        platform_meta={},
+                        session_id=f'lottery_{抽奖ID}'
+                    )
+                    event.set_group_id(群聊ID)
+                async for msg in self.发送消息(event, 消息内容):
+                    yield msg
+            except Exception as e:
+                logger.error(f"发送获奖消息时出错: {e}")
+                # 尝试使用全新的事件对象作为最后的备用方案
+                try:
+                    backup_event = AstrMessageEvent(
+                        message_str='',
+                        message_obj=None,
+                        platform_meta={},
+                        session_id=f'lottery_backup_{抽奖ID}'
+                    )
+                    backup_event.set_group_id(群聊ID)
+                    async for msg in self.发送消息(backup_event, 消息内容):
+                        yield msg
+                except Exception as backup_error:
+                    logger.error(f"备用方案也失败: {backup_error}")
 
         项目ID = self.game_configs[数据['游戏名称']]['项目ID']
         奖励字符串 = self.抽奖数据列表[数据['游戏名称']]['发送的奖励']+f":{数据['奖励数量']}"
