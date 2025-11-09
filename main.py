@@ -161,7 +161,7 @@ class JsonHandler:
     
     @staticmethod
     def 存储向量数据(集合名称: str, 数据ID: str, 向量: list, 元数据: dict = None) -> str:
-        """存储向量数据到Milvus Lite
+        """存储向量数据到Milvus Lite或降级到SQLite/JSON
         
         Args:
             集合名称: 向量集合名称
@@ -170,13 +170,46 @@ class JsonHandler:
             元数据: 可选的元数据字典
             
         Returns:
-            成功返回Milvus ID，失败返回None
+            成功返回ID，失败返回None
         """
-        return db_handler.store_vector(集合名称, 数据ID, 向量, 元数据)
+        try:
+            # 尝试使用Milvus存储向量数据
+            if db_handler._milvus_client is not None:
+                return db_handler.store_vector(集合名称, 数据ID, 向量, 元数据)
+            else:
+                # 降级到SQLite存储向量数据
+                logger.warning("Milvus Lite不可用，使用SQLite存储向量数据")
+                
+                # 构建存储键名
+                key = f"vector_{集合名称}_{数据ID}"
+                stored_data = {
+                    "vector": 向量,
+                    "metadata": 元数据 or {},
+                    "timestamp": time.time()
+                }
+                
+                # 保存到SQLite
+                if db_handler.save_complex_data(key, "vector_data", json.dumps(stored_data, ensure_ascii=False)):
+                    return dataID
+                
+                # 最后降级到JSON文件
+                logger.warning("SQLite存储失败，尝试保存到JSON文件")
+                向量存储文件 = f"向量存储_{集合名称}.json"
+                向量数据 = JsonHandler.读取Json字典(向量存储文件)
+                向量数据[数据ID] = stored_data
+                
+                文件路径 = JsonHandler.获取文件路径(向量存储文件, True)
+                with open(文件路径, 'w', encoding='utf-8') as f:
+                    json.dump(向量数据, f, ensure_ascii=False, indent=2)
+                
+                return 数据ID
+        except Exception as e:
+            logger.error(f"存储向量数据失败: {e}")
+            return None
     
     @staticmethod
     def 搜索相似向量(集合名称: str, 查询向量: list, top_k: int = 5) -> list:
-        """搜索相似向量
+        """搜索相似向量，支持Milvus降级到SQLite/JSON
         
         Args:
             集合名称: 向量集合名称
@@ -186,7 +219,74 @@ class JsonHandler:
         Returns:
             相似向量列表，每个元素包含id、距离和元数据
         """
-        return db_handler.search_vectors(集合名称, 查询向量, top_k)
+        try:
+            # 尝试使用Milvus搜索向量
+            if db_handler._milvus_client is not None:
+                return db_handler.search_vectors(集合名称, 查询向量, top_k)
+            else:
+                # 降级到SQLite进行简单相似性搜索
+                logger.warning("Milvus Lite不可用，使用降级方案进行向量搜索")
+                
+                # 尝试从SQLite读取向量数据
+                results = []
+                key_prefix = f"vector_{集合名称}_"
+                
+                # 获取所有相关的向量数据
+                all_data = db_handler.get_all_key_values("")
+                for key, value in all_data:
+                    if key.startswith(key_prefix):
+                        try:
+                            # 从SQLite读取向量数据
+                            vector_data_str = db_handler.get_complex_data(key, "vector_data")
+                            if vector_data_str:
+                                vector_data = json.loads(vector_data_str)
+                                vector = vector_data.get("vector", [])
+                                if vector:
+                                    # 计算简单的余弦相似度
+                                    similarity = sum(a * b for a, b in zip(query_vector, vector))
+                                    
+                                    # 计算向量长度
+                                    query_norm = sum(x * x for x in query_vector) ** 0.5
+                                    vector_norm = sum(x * x for x in vector) ** 0.5
+                                    
+                                    if query_norm > 0 and vector_norm > 0:
+                                        similarity = similarity / (query_norm * vector_norm)
+                                        
+                                        # 提取数据ID
+                                        data_id = key.replace(key_prefix, "")
+                                        results.append({
+                                            "id": data_id,
+                                            "distance": 1 - similarity,
+                                            "metadata": vector_data.get("metadata", {})
+                                        })
+                        except Exception as inner_e:
+                            logger.warning(f"处理SQLite向量数据失败: {inner_e}")
+                
+                # 如果SQLite没有结果，尝试从JSON文件读取
+                if not results:
+                    logger.info("尝试从JSON文件读取向量数据")
+                    向量存储文件 = f"向量存储_{集合名称}.json"
+                    向量数据 = JsonHandler.读取Json字典(向量存储文件)
+                    
+                    for 数据ID, 项目 in 向量数据.items():
+                        向量 = 项目.get("向量", [])
+                        if len(向量) != len(查询向量):
+                            continue
+                        
+                        # 计算欧几里得距离
+                        距离 = sum((a - b) ** 2 for a, b in zip(查询向量, 向量)) ** 0.5
+                        results.append({
+                            "id": 数据ID,
+                            "distance": 距离,
+                            "metadata": 项目.get("元数据", {})
+                        })
+                
+                # 排序并返回结果
+                results.sort(key=lambda x: x["distance"])
+                return results[:top_k]
+        except Exception as e:
+            logger.error(f"搜索相似向量失败: {e}")
+            return []
     
     @staticmethod
     def is_milvus_available() -> bool:
@@ -195,7 +295,11 @@ class JsonHandler:
         Returns:
             Milvus Lite是否可用
         """
-        return MilvusClient is not None
+        try:
+            # 检查全局MilvusClient和db_handler的Milvus客户端
+            return MilvusClient is not None and db_handler._milvus_client is not None
+        except Exception:
+            return False
         return db_handler.store_vector(集合名称, 数据ID, 向量, 元数据)
     
     @staticmethod
@@ -373,67 +477,47 @@ class DatabaseHandler:
         """初始化Milvus Lite客户端"""
         try:
             if MilvusClient is not None:
-                # 创建Milvus Lite数据库文件
-                项目根目录 = Path(__file__).parent
-                milvus_db_path = str(项目根目录 / "UserData" / "milvus_data.db")
-                self._milvus_client = MilvusClient(milvus_db_path)
-                logger.info(f"成功初始化Milvus Lite，数据库路径: {milvus_db_path}")
-                
-                # 创建默认的向量集合
-                default_collections = [
-                    {"name": "conversations", "dimension": 768},
-                    {"name": "game_data", "dimension": 768}
-                ]
-                
-                for collection in default_collections:
-                    if not self._milvus_client.has_collection(collection["name"]):
-                        self._milvus_client.create_collection(
-                            collection_name=collection["name"],
-                            dimension=collection["dimension"]
-                        )
-                        logger.info(f"创建向量集合: {collection['name']}")
+                try:
+                    # 创建Milvus Lite数据库文件
+                    项目根目录 = Path(__file__).parent
+                    milvus_db_path = str(项目根目录 / "UserData" / "milvus_data.db")
+                    self._milvus_client = MilvusClient(milvus_db_path)
+                    logger.info(f"成功初始化Milvus Lite: {milvus_db_path}")
+                    
+                    # 创建默认集合（如果不存在）
+                    self._create_default_collections()
+                except Exception as inner_e:
+                    logger.warning(f"Milvus Lite初始化失败（将继续使用SQLite）: {inner_e}")
+                    logger.info("如需使用向量搜索功能，请安装完整的Milvus Lite: pip install pymilvus[milvus_lite]")
+                    self._milvus_client = None
+            else:
+                logger.info("Milvus Lite未安装，使用SQLite作为替代存储")
         except Exception as e:
-            logger.error(f"初始化Milvus Lite失败: {e}")
-            milvus_db_path = str(项目根目录 / "UserData" / "milvus_data.db")
-            self._milvus_client = MilvusClient(milvus_db_path)
-            logger.info(f"成功初始化Milvus Lite: {milvus_db_path}")
-                
-             # 创建默认集合（如果不存在）
-            self._create_default_collections()
-            
-            logger.info("Milvus Lite未启用，使用SQLite作为替代")
-            
-        except Exception as e:
-            logger.error(f"初始化Milvus Lite失败: {e}")
+            logger.error(f"Milvus初始化过程异常: {e}")
             self._milvus_client = None
     
     def _create_default_collections(self):
         """创建默认的向量集合"""
-        if self._milvus_client is None:
-            return
-        
         try:
-            # 创建对话记忆集合
-            if not self._milvus_client.has_collection("conversations"):
-                self._milvus_client.create_collection(
-                    collection_name="conversations",
-                    dimension=768,  # 默认使用768维向量，可根据实际embedding模型调整
-                    primary_field_name="id",
-                    vector_field_name="embedding"
-                )
-                logger.info("创建对话记忆向量集合成功")
+            if self._milvus_client is None:
+                return
+                
+            default_collections = [
+                {"name": "conversations", "dimension": 768},
+                {"name": "game_data", "dimension": 768}
+            ]
             
-            # 创建游戏数据集合
-            if not self._milvus_client.has_collection("game_data"):
-                self._milvus_client.create_collection(
-                    collection_name="game_data",
-                    dimension=768,
-                    primary_field_name="id",
-                    vector_field_name="embedding"
-                )
-                logger.info("创建游戏数据向量集合成功")
+            for collection in default_collections:
+                if not self._milvus_client.has_collection(collection["name"]):
+                    self._milvus_client.create_collection(
+                        collection_name=collection["name"],
+                        dimension=collection["dimension"]
+                    )
+                    logger.info(f"创建向量集合: {collection['name']}")
         except Exception as e:
-            logger.error(f"创建向量集合失败: {e}")
+            logger.error(f"创建默认向量集合失败: {e}")
+            # 即使集合创建失败，也不影响插件继续运行
+            pass
     
     def insert_vector(self, collection_name, data_id, vector, metadata=None):
         """插入向量数据"""
@@ -597,76 +681,258 @@ class DatabaseHandler:
             return None
     
     def store_vector(self, collection_name, data_id, vector, metadata=None):
-        """存储向量数据到Milvus Lite"""
-        try:
-            if self._milvus_client is None:
-                logger.warning("Milvus Lite客户端未初始化，无法存储向量")
-                return None
-            
-            # 确保集合存在
-            if not self._milvus_client.has_collection(collection_name):
-                # 默认为768维向量
-                self._milvus_client.create_collection(
+        """存储向量数据，优先使用Milvus Lite，降级到SQLite"""
+        # 优先尝试Milvus存储
+        if self._milvus_client is not None:
+            try:
+                # 确保集合存在
+                if not self._milvus_client.has_collection(collection_name):
+                    # 默认为768维向量
+                    self._milvus_client.create_collection(
+                        collection_name=collection_name,
+                        dimension=len(vector) if vector else 768
+                    )
+                    logger.info(f"创建新的向量集合: {collection_name}")
+                
+                # 准备数据
+                data = {
+                    "id": data_id,
+                    "vector": vector,
+                    "metadata": metadata or {}
+                }
+                
+                # 插入向量
+                result = self._milvus_client.insert(
                     collection_name=collection_name,
-                    dimension=len(vector) if vector else 768
+                    data=[data]
                 )
-                logger.info(f"创建新的向量集合: {collection_name}")
-            
-            # 准备数据
-            data = {
-                "id": data_id,
+                
+                # 保存映射关系
+                if result.get("insert_count") == 1:
+                    milvus_id = data_id  # 使用data_id作为milvus_id
+                    self._save_vector_mapping(collection_name, data_id, milvus_id)
+                    return milvus_id
+                
+                # 插入失败，尝试降级到SQLite
+                logger.warning("Milvus插入失败，降级到SQLite存储")
+                return self._store_vector_to_sqlite(collection_name, data_id, vector, metadata)
+            except Exception as e:
+                logger.warning(f"Milvus存储失败，降级到SQLite: {e}")
+                # 降级到SQLite存储
+                return self._store_vector_to_sqlite(collection_name, data_id, vector, metadata)
+        else:
+            # Milvus不可用，直接使用SQLite
+            logger.info(f"Milvus不可用，使用SQLite存储向量数据: {collection_name}")
+            return self._store_vector_to_sqlite(collection_name, data_id, vector, metadata)
+    
+    def _store_vector_to_sqlite(self, collection_name, data_id, vector, metadata=None):
+        """将单个向量数据存储到SQLite数据库（降级方案）"""
+        try:
+            # 构建存储键名
+            key = f"vector_{collection_name}_{data_id}"
+            stored_data = {
                 "vector": vector,
-                "metadata": metadata or {}
+                "metadata": metadata or {},
+                "timestamp": time.time(),
+                "storage_type": "sqlite_backup"
             }
             
-            # 插入向量
-            result = self._milvus_client.insert(
-                collection_name=collection_name,
-                data=[data]
-            )
-            
-            # 保存映射关系
-            if result.get("insert_count") == 1:
-                milvus_id = data_id  # 使用data_id作为milvus_id
-                self._save_vector_mapping(collection_name, data_id, milvus_id)
-                return milvus_id
-            
+            # 保存到SQLite的complex_data表
+            if self.save_complex_data(key, "vector_data", json.dumps(stored_data, ensure_ascii=False)):
+                return data_id
             return None
         except Exception as e:
-            logger.error(f"存储向量数据失败: {e}")
+            logger.error(f"SQLite向量存储失败: {e}")
             return None
     
-    def search_vectors(self, collection_name, query_vector, top_k=5):
-        """搜索相似向量"""
+    def store_vectors(self, collection_name, vector_data):
+        """批量存储向量数据，优先使用Milvus Lite，降级到SQLite"""
+        # 优先尝试Milvus存储
+        if self._milvus_client is not None:
+            try:
+                # 确保集合存在
+                if not self._milvus_client.has_collection(collection_name):
+                    # 自动确定向量维度
+                    vectors = vector_data.get("vectors", [])
+                    if vectors:
+                        dimension = len(vectors[0])
+                        self._milvus_client.create_collection(
+                            collection_name=collection_name,
+                            dimension=dimension
+                        )
+                        logger.info(f"自动创建向量集合: {collection_name}, 维度: {dimension}")
+                    else:
+                        logger.error("无法确定向量维度")
+                        # 降级到SQLite
+                        return self._store_vectors_to_sqlite(collection_name, vector_data)
+                
+                # 准备插入数据
+                entities = []
+                vectors = vector_data.get("vectors", [])
+                metadata_list = vector_data.get("metadata", [])
+                
+                for i, vector in enumerate(vectors):
+                    entity = {
+                        "vector": vector,
+                        "id": i
+                    }
+                    
+                    # 添加元数据（如果有）
+                    if i < len(metadata_list) and isinstance(metadata_list[i], dict):
+                        entity.update(metadata_list[i])
+                    
+                    entities.append(entity)
+                
+                # 插入数据
+                self._milvus_client.insert(
+                    collection_name=collection_name,
+                    data=entities
+                )
+                
+                logger.info(f"成功存储{len(entities)}条向量数据到集合: {collection_name}")
+                return True
+                
+            except Exception as e:
+                logger.warning(f"Milvus存储失败，降级到SQLite: {e}")
+                # 降级到SQLite存储
+                return self._store_vectors_to_sqlite(collection_name, vector_data)
+        else:
+            # Milvus不可用，直接使用SQLite
+            logger.info(f"Milvus不可用，使用SQLite存储向量数据: {collection_name}")
+            return self._store_vectors_to_sqlite(collection_name, vector_data)
+    
+    def _store_vectors_to_sqlite(self, collection_name, vector_data):
+        """将批量向量数据存储到SQLite数据库（降级方案）"""
         try:
-            if self._milvus_client is None:
-                logger.warning("Milvus Lite客户端未初始化，无法搜索向量")
-                return []
+            # 使用SQLite的complex_data表存储向量数据
+            key = f"vector_collection_{collection_name}"
             
-            if not self._milvus_client.has_collection(collection_name):
-                logger.warning(f"向量集合不存在: {collection_name}")
-                return []
+            # 准备存储数据
+            stored_data = {
+                "vectors": vector_data.get("vectors", []),
+                "metadata": vector_data.get("metadata", []),
+                "timestamp": time.time(),
+                "storage_type": "sqlite_backup"
+            }
             
-            # 搜索向量
-            results = self._milvus_client.search(
-                collection_name=collection_name,
-                data=[query_vector],
-                limit=top_k,
-                search_params={"metric_type": "COSINE"}
-            )
+            # 保存到SQLite
+            return self.save_complex_data(key, "vector_collection_data", json.dumps(stored_data, ensure_ascii=False))
             
-            # 处理结果
-            search_results = []
-            for result in results[0]:
-                search_results.append({
-                    "id": result.get("id"),
-                    "distance": result.get("distance"),
-                    "metadata": result.get("entity", {}).get("metadata", {})
-                })
-            
-            return search_results
         except Exception as e:
-            logger.error(f"搜索向量失败: {e}")
+            logger.error(f"SQLite向量存储失败: {e}")
+            return False
+    
+    def search_vectors(self, collection_name, query_vector, top_k=5):
+        """搜索相似向量，优先使用Milvus Lite，降级到SQLite"""
+        # 优先尝试Milvus搜索
+        if self._milvus_client is not None:
+            try:
+                if not self._milvus_client.has_collection(collection_name):
+                    logger.warning(f"集合不存在: {collection_name}")
+                    # 降级到SQLite搜索
+                    return self._search_vectors_in_sqlite(collection_name, query_vector, top_k)
+                
+                # 搜索向量
+                results = self._milvus_client.search(
+                    collection_name=collection_name,
+                    data=[query_vector],
+                    limit=top_k,
+                    search_params={"metric_type": "COSINE"}
+                )
+                
+                # 处理结果
+                search_results = []
+                for result in results[0]:
+                    search_results.append({
+                        "id": result.get("id"),
+                        "distance": result.get("distance"),
+                        "metadata": result.get("entity", {}).get("metadata", {})
+                    })
+                
+                return search_results
+            except Exception as e:
+                logger.warning(f"Milvus搜索失败，降级到SQLite: {e}")
+                # 降级到SQLite搜索
+                return self._search_vectors_in_sqlite(collection_name, query_vector, top_k)
+        else:
+            # Milvus不可用，直接使用SQLite搜索
+            logger.info(f"Milvus不可用，使用SQLite搜索向量数据: {collection_name}")
+            return self._search_vectors_in_sqlite(collection_name, query_vector, top_k)
+    
+    def _search_vectors_in_sqlite(self, collection_name, query_vector, top_k=5):
+        """在SQLite中搜索相似向量（降级方案）"""
+        try:
+            results = []
+            
+            # 方法1: 搜索向量集合数据
+            collection_key = f"vector_collection_{collection_name}"
+            collection_data_str = self.get_complex_data(collection_key, "vector_collection_data")
+            
+            if collection_data_str:
+                try:
+                    collection_data = json.loads(collection_data_str)
+                    vectors = collection_data.get("vectors", [])
+                    metadata_list = collection_data.get("metadata", [])
+                    
+                    for i, vector in enumerate(vectors):
+                        try:
+                            # 计算余弦相似度
+                            similarity = sum(a * b for a, b in zip(query_vector, vector))
+                            query_norm = sum(x * x for x in query_vector) ** 0.5
+                            vector_norm = sum(x * x for x in vector) ** 0.5
+                            
+                            if query_norm > 0 and vector_norm > 0:
+                                similarity = similarity / (query_norm * vector_norm)
+                                metadata = metadata_list[i] if i < len(metadata_list) else {}
+                                
+                                results.append({
+                                    "id": str(i),
+                                    "distance": 1 - similarity,
+                                    "metadata": metadata
+                                })
+                        except Exception as inner_e:
+                            logger.warning(f"计算集合向量相似度失败: {inner_e}")
+                except Exception as e:
+                    logger.warning(f"解析集合数据失败: {e}")
+            
+            # 方法2: 搜索单个向量数据
+            if len(results) < top_k:  # 如果集合搜索结果不足，再搜索单个向量
+                key_prefix = f"vector_{collection_name}_"
+                # 获取所有相关的向量数据
+                all_data = db_handler.get_all_key_values("")
+                for key, value in all_data:
+                    if key.startswith(key_prefix) and len(results) < top_k:
+                        try:
+                            # 从SQLite读取向量数据
+                            vector_data_str = db_handler.get_complex_data(key, "vector_data")
+                            if vector_data_str:
+                                vector_data = json.loads(vector_data_str)
+                                vector = vector_data.get("vector", [])
+                                if vector:
+                                    # 计算余弦相似度
+                                    similarity = sum(a * b for a, b in zip(query_vector, vector))
+                                    query_norm = sum(x * x for x in query_vector) ** 0.5
+                                    vector_norm = sum(x * x for x in vector) ** 0.5
+                                    
+                                    if query_norm > 0 and vector_norm > 0:
+                                        similarity = similarity / (query_norm * vector_norm)
+                                        
+                                        # 提取数据ID
+                                        data_id = key.replace(key_prefix, "")
+                                        results.append({
+                                            "id": data_id,
+                                            "distance": 1 - similarity,
+                                            "metadata": vector_data.get("metadata", {})
+                                        })
+                        except Exception as inner_e:
+                            logger.warning(f"处理SQLite向量数据失败: {inner_e}")
+            
+            # 按距离排序（距离越小越相似）
+            results.sort(key=lambda x: x["distance"])
+            return results[:top_k]
+            
+        except Exception as e:
+            logger.error(f"SQLite向量搜索失败: {e}")
             return []
     
     def _save_vector_mapping(self, collection_name, data_id, milvus_id):
