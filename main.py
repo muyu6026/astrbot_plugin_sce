@@ -2609,9 +2609,7 @@ class MyPlugin(Star):
             self.logger.error(f"记录消息统计失败(导入错误): {e}", exc_info=True)
         except (FileNotFoundError, PermissionError, UnicodeError, MemoryError, SystemError) as e:
             # 修复：替换过于宽泛的Exception为具体异常类型
-            self.logger.error(f"记录消息统计失败(系统资源错误): {e}", exc_info=True)
-    
-    @data_operation_handler('validate', '消息数据参数')
+            self.logger.error(f"记录消息统计失败(系统资源错误): {e}", exc_info=True) 
     async def _validate_message_data(self, group_id: str, user_id: str, nickname: str) -> tuple:
         """验证消息数据参数
         
