@@ -508,6 +508,26 @@ class EmailService:
         # 记录传入的完整奖励字符串
         print(f"quick_send方法收到的完整奖励字符串: '{attachment}'")
         
+        # 验证并清理recipient_id，确保它是一个有效的数字格式用户ID
+        if recipient_id:
+            # 清理空格和不可见字符
+            cleaned_recipient_id = str(recipient_id).strip()
+            # 验证是否只包含数字
+            if not cleaned_recipient_id.isdigit():
+                print(f"警告：收件人ID '{recipient_id}' 包含非数字字符，可能导致400错误")
+                # 尝试提取数字部分（如果是混合格式）
+                import re
+                numbers_only = re.sub(r'\D', '', cleaned_recipient_id)
+                if numbers_only:
+                    print(f"已提取数字部分: {numbers_only}")
+                    recipient_id = numbers_only
+                else:
+                    print("无法从收件人ID中提取有效的数字，将使用原ID但可能导致错误")
+            else:
+                recipient_id = cleaned_recipient_id
+        
+        print(f"清理后的收件人ID: '{recipient_id}'")
+        
         #直接传递完整的奖励字符串，不做任何修改或分割
         email_data = {
             "标题": title,
@@ -625,6 +645,28 @@ class EmailService:
                 print(f"邮件服务响应状态码: {response.status_code}")
                 print(f"邮件服务响应内容: {response.text}")
                 
+                # 处理400错误（请求参数问题）
+                if response.status_code == 400:
+                    print(f"收到400 Bad Request错误，请求参数可能有问题")
+                    print(f"详细响应内容: {response.text}")
+                    
+                    # 分析可能的问题：验证用户ID格式
+                    target_id = request_data.get('payload', {}).get('target', '')
+                    if target_id and not str(target_id).strip().isdigit():
+                        print(f"警告: 目标用户ID '{target_id}' 可能格式不正确，这可能是400错误的原因")
+                    
+                    # 如果是最后一次尝试，直接返回详细错误
+                    if attempt >= self.max_retries:
+                        error_msg = f"HTTP错误: 400 Bad Request，请求参数问题"
+                        print(error_msg)
+                        return {"success": False, "message": error_msg, "response": response.text, "error_code": "BAD_REQUEST"}
+                    
+                    # 等待后重试
+                    print("等待2秒后重试...")
+                    import time
+                    time.sleep(2)
+                    continue
+                    
                 # 处理401错误（需要刷新token）
                 if response.status_code == 401:
                     print(f"收到401未授权错误，token可能已过期")
@@ -948,10 +990,19 @@ class MyPlugin(Star):
                 expiry = self._parse_token_expiry(token)
                 if expiry:
                     time_until_expiry = expiry - datetime.datetime.now()
-                    logger.info(f"token过期时间: {expiry}，剩余时间: {time_until_expiry}")
-                    # 如果token将在30分钟内过期，记录警告
-                    if time_until_expiry.total_seconds() < 1800:
-                        logger.warning(f"token将在30分钟内过期，建议尽快刷新")
+                    # 首先检查token是否已过期（防止解析时已过期但_is_token_valid检查通过的情况）
+                    if time_until_expiry.total_seconds() < 0:
+                        logger.warning(f"token已过期，过期时间: {expiry}，已过期时间: {-time_until_expiry}")
+                        # 即使_is_token_valid通过，发现已过期也应该立即刷新
+                        self._refresh_all_games()
+                    else:
+                        logger.info(f"token过期时间: {expiry}，剩余时间: {time_until_expiry}")
+                        # 如果token将在30分钟内过期，记录警告
+                        if time_until_expiry.total_seconds() < 1800:
+                            logger.warning(f"token将在30分钟内过期，建议尽快刷新")
+                        # 使用asyncio.create_task异步执行刷新操作
+                        import asyncio
+                        asyncio.create_task(self._refresh_all_games())
             else:
                 logger.warning(f"加载的token无效，使用默认token")
                 self.current_token = self.auth_token
@@ -1009,12 +1060,18 @@ class MyPlugin(Star):
             expiry = self._parse_token_expiry(self.current_token)
             if expiry:
                 time_until_expiry = expiry - datetime.datetime.now()
+                # 检查token是否已过期
+                if time_until_expiry.total_seconds() < 0:
+                    logger.warning(f"token已过期，过期时间: {expiry}，已过期时间: {-time_until_expiry}")
+                    await self._refresh_all_games()
+                    return True
                 # 如果token将在10分钟内过期，立即刷新
-                if 0 < time_until_expiry.total_seconds() < 600:
+                elif time_until_expiry.total_seconds() < 600:
                     logger.warning(f"token将在10分钟内过期，立即刷新")
                     await self._refresh_all_games()
                     return True
-                logger.info(f"token状态正常，剩余有效期: {time_until_expiry}")
+                else:
+                    logger.info(f"token状态正常，剩余有效期: {time_until_expiry}")
             return False
         except Exception as e:
             logger.error(f"检查token过期时间失败: {e}")
@@ -1529,14 +1586,24 @@ class MyPlugin(Star):
             status_code = result.get('status_code')
             
             # 检测token错误或400/401/403错误
-            if not result.get('success') and (
-                (message and ('token' in message.lower() or '认证' in message or any(code in message for code in ['401', '403', '400'])))
-                or status_code in [400, 401, 403]
-            ):
-                logger.warning(f"检测到邮件发送错误: {message or status_code}，尝试刷新token")
+            if not result.get('success'):
+                error_detected = False
                 
-                # 立即尝试刷新token（使用新的浏览器模拟方法）
-                refresh_result = await self._refresh_all_games()
+                # 检测400错误（请求参数问题）
+                if status_code == 400 or (message and '400' in message):
+                    logger.warning(f"检测到400 Bad Request错误，可能是请求参数问题，尤其是用户ID格式")
+                    logger.warning(f"详细错误信息: {message}")
+                    logger.warning(f"目标用户ID: {发送的用户}")
+                    error_detected = True
+                # 检测token相关错误
+                elif (message and ('token' in message.lower() or '认证' in message or any(code in message for code in ['401', '403']))) or status_code in [401, 403]:
+                    logger.warning(f"检测到邮件发送错误: {message or status_code}，尝试刷新token")
+                    error_detected = True
+                
+                if error_detected:
+                
+                    # 立即尝试刷新token（使用新的浏览器模拟方法）
+                    refresh_result = await self._refresh_all_games()
                 
                 # 如果刷新成功且有新token
                 if refresh_result and (refresh_result.get("success") or isinstance(refresh_result, str)):
