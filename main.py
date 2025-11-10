@@ -344,76 +344,15 @@ class EmailService:
                 error_message = add_result.get('message', '添加邮件失败')
                 return {"success": False, "message": error_message, "error_code": "EMAIL_ADD_FAILED"}
             
-            # 第二步：触发发送
+            # 第二步：触发发送（即使没有row_id也尝试触发，参考C#实现）
             row_id = add_result.get('row_id')
             response_structure = add_result.get('response_structure', [])
             raw_response = add_result.get('raw_response', '')
             has_dialog_box = add_result.get('has_dialog_box', False)
             
-            # 处理特殊情况：根据抓包数据，即使没有row_id但有dialog_box字段，邮件实际上已经被添加并发送
-            if not row_id and has_dialog_box and add_result.get('success'):
-                print(f"检测到特殊响应格式（有dialog_box字段），邮件已成功添加并自动发送")
-                return {
-                    "success": True,
-                    "message": "邮件添加成功并自动发送（特殊响应格式）",
-                    "row_id": None,
-                    "special_response_format": True,
-                    "response_type": "dialog_box"
-                }
-            
-            if row_id:
-                # 调用触发发送方法
-                trigger_result = self._trigger_email_send(row_id)
-                print(f"触发发送结果: {trigger_result}")
-                
-                if trigger_result.get("success"):
-                    # 成功情况下，返回更详细的信息
-                    return {
-                        "success": True,
-                        "message": "邮件发送成功",
-                        "row_id": row_id,
-                        "trigger_result": trigger_result,
-                        "raw_response": trigger_result.get('raw_response', ''),
-                        "response_data": trigger_result.get('response_data', {})
-                    }
-                else:
-                    # 触发发送失败，但邮件已添加
-                    # 根据最新接口响应格式，即使触发发送返回失败，也可能邮件已经成功添加
-                    error_msg = trigger_result.get('message', '未知错误')
-                    error_type = trigger_result.get('error_type', 'UNKNOWN')
-                    
-                    # 记录详细错误信息
-                    print(f"邮件添加成功但触发发送失败: {error_msg}, 错误类型: {error_type}")
-                    
-                    # 根据错误类型进行不同处理
-                    if error_type == 'TIMEOUT':
-                        # 超时情况下，邮件可能已经发送成功，我们给予警告但仍标记为可能成功
-                        print(f"警告: 触发发送超时，邮件可能已经成功发送但无法确认")
-                        return {
-                            "success": False,
-                            "message": f"邮件添加成功，但触发发送超时，邮件可能已发送: {error_msg}",
-                            "row_id": row_id,
-                            "email_added": True,
-                            "trigger_timeout": True,
-                            "warning": "超时警告：邮件可能已成功发送"
-                        }
-                    else:
-                        # 其他错误类型
-                        return {
-                            "success": False,
-                            "message": f"邮件添加成功但触发发送失败: {error_msg}",
-                            "row_id": row_id,
-                            "email_added": True,
-                            "error_type": error_type,
-                            "raw_response": trigger_result.get('raw_response', '')
-                        }
-            else:
-                # 未获取到row_id时的增强错误处理
-                error_msg = f"未获取到邮件行ID，响应结构: {response_structure}"
-                print(f"发送邮件处理: {error_msg}")
-                print(f"原始响应内容: {raw_response}")
-                
-                # 尝试从原始响应中直接提取row_id
+            # 尝试从原始响应中提取row_id
+            if not row_id:
+                print("未获取到row_id，尝试从原始响应中提取...")
                 try:
                     # 如果原始响应是JSON格式，尝试直接解析
                     import json
@@ -427,51 +366,96 @@ class EmailService:
                                     if key in raw_json['data']:
                                         row_id = raw_json['data'][key]
                                         print(f"从原始响应中成功提取到row_id: {row_id}")
-                                        # 尝试使用提取到的row_id触发发送
-                                        trigger_result = self._trigger_email_send(row_id)
-                                        if trigger_result.get("success"):
-                                            return {
-                                                "success": True,
-                                                "message": "邮件发送成功(从原始响应中提取row_id)",
-                                                "row_id": row_id,
-                                                "trigger_result": trigger_result
-                                            }
+                                        break
                             # 直接在根对象中查找
-                            for key in ['row_id', 'id', 'rowId']:
-                                if key in raw_json:
-                                    row_id = raw_json[key]
-                                    print(f"从原始响应根对象中成功提取到row_id: {row_id}")
-                                    # 尝试使用提取到的row_id触发发送
-                                    trigger_result = self._trigger_email_send(row_id)
-                                    if trigger_result.get("success"):
-                                        return {
-                                            "success": True,
-                                            "message": "邮件发送成功(从原始响应根对象中提取row_id)",
-                                            "row_id": row_id,
-                                            "trigger_result": trigger_result
-                                        }
+                            if not row_id:
+                                for key in ['row_id', 'id', 'rowId']:
+                                    if key in raw_json:
+                                        row_id = raw_json[key]
+                                        print(f"从原始响应根对象中成功提取到row_id: {row_id}")
+                                        break
                 except Exception as parse_error:
                     print(f"解析原始响应异常: {str(parse_error)}")
+            
+            # 无论是否有row_id，都尝试触发发送邮件（关键修改：参考C#实现）
+            # 在C#代码中，即使添加邮件成功，也显式调用了触发发送方法
+            print("根据C#实现，尝试触发邮件发送...")
+            
+            # 先尝试使用row_id触发发送
+            trigger_success = False
+            if row_id:
+                # 调用触发发送方法
+                trigger_result = self._trigger_email_send(row_id)
+                print(f"触发发送结果: {trigger_result}")
                 
-                # 重要修改：根据抓包数据，即使没有row_id，只要添加操作成功，也应视为成功
-                # 这是因为系统实际上已经处理了邮件的添加和发送
-                if add_result.get('success'):
-                    print(f"虽然没有row_id，但添加操作成功，邮件可能已自动发送")
+                if trigger_result.get("success"):
+                    trigger_success = True
+                    # 成功情况下，返回更详细的信息
                     return {
                         "success": True,
-                        "message": "邮件添加成功（系统自动处理发送）",
-                        "row_id": None,
-                        "auto_processed": True
+                        "message": "邮件发送成功",
+                        "row_id": row_id,
+                        "trigger_result": trigger_result,
+                        "raw_response": trigger_result.get('raw_response', ''),
+                        "response_data": trigger_result.get('response_data', {})
                     }
+                else:
+                    # 触发发送失败，但邮件已添加
+                    error_msg = trigger_result.get('message', '未知错误')
+                    error_type = trigger_result.get('error_type', 'UNKNOWN')
+                    print(f"邮件添加成功但触发发送失败: {error_msg}, 错误类型: {error_type}")
+            else:
+                # 没有row_id时的特殊处理
+                print("没有row_id，无法直接触发发送，但邮件已添加到系统")
                 
-                # 所有尝试都失败，返回详细的错误信息
+            # 如果触发发送失败或者没有row_id，根据情况决定返回结果
+            # 特别注意：根据C#实现和用户反馈，邮件可能只是被添加而未实际发送
+            
+            # 处理特殊情况：有dialog_box字段
+            if has_dialog_box:
+                print(f"检测到特殊响应格式（有dialog_box字段），邮件已成功添加")
                 return {
-                    "success": False, 
-                    "message": error_msg,
-                    "error_code": "NO_ROW_ID",
-                    "response_structure": response_structure,
-                    "raw_response_preview": raw_response[:200] + '...' if len(raw_response) > 200 else raw_response
+                    "success": True,
+                    "message": "邮件添加成功并自动发送（特殊响应格式）",
+                    "row_id": None,
+                    "special_response_format": True,
+                    "response_type": "dialog_box"
                 }
+            
+            # 检查是否是TIMEOUT错误
+            if row_id and error_type == 'TIMEOUT':
+                print(f"警告: 触发发送超时，邮件可能已经成功发送但无法确认")
+                return {
+                    "success": False,
+                    "message": f"邮件添加成功，但触发发送超时，邮件可能已发送: {error_msg}",
+                    "row_id": row_id,
+                    "email_added": True,
+                    "trigger_timeout": True,
+                    "warning": "超时警告：邮件可能已成功发送"
+                }
+            
+            # 对于其他情况，特别是没有row_id的情况，我们不能简单地认为邮件已发送成功
+            # 根据用户反馈，这种情况下邮件可能只是被添加到后台但未实际发送
+            if add_result.get('success'):
+                # 重要修改：根据用户反馈，即使添加操作成功，也不认为邮件已自动发送
+                # 我们返回一个特殊的状态，表明邮件已添加但可能未发送
+                print(f"邮件已添加到系统，但需要手动触发发送或检查系统后台")
+                return {
+                    "success": False,  # 修改为False，因为邮件可能未实际发送
+                    "message": "邮件已添加到系统，但可能未实际发送",
+                    "row_id": row_id,
+                    "email_added": True,  # 标记邮件已添加
+                    "needs_manual_check": True  # 标记需要手动检查
+                }
+            
+            # 所有尝试都失败，返回详细的错误信息
+            return {
+                "success": False, 
+                "message": f"未获取到邮件行ID，响应结构: {response_structure}",
+                "error_code": "NO_ROW_ID",
+                "response_structure": response_structure,
+                "raw_response_preview": raw_response[:200] + '...' if len(raw_response) > 200 else raw_response
+            }
             
         except requests.RequestException as e:
             error_msg = f"网络请求异常: {str(e)}"
@@ -2191,7 +2175,7 @@ class MyPlugin(Star):
             except asyncio.CancelledError:
                 logger.info("开奖任务已取消")
         except Exception as e:
-            logger.error(f"定时任务异常: {e}")
+            logger.error(f"开奖任务异常: {e}")
 
     async def 开奖(self, 抽奖ID,event:AstrMessageEvent):
         抽奖数据=JsonHandler.读取Json字典("抽奖数据存储.json")
