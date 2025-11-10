@@ -1322,14 +1322,23 @@ class MyPlugin(Star):
                     新签到数据 = {key: "false" for key in 签到数据.keys()}
                     # 写入文件
                     # 使用JSON文件存储签到数据
-            文件路径 = JsonHandler.获取文件路径("玩家今天是否签到过.json", True)
-            try:
-                with open(文件路径, 'w', encoding='utf-8') as f:
-                    json.dump(新签到数据, f, ensure_ascii=False, indent=2)
-                logger.info(f"签到数据已保存到: {文件路径}")
-            except Exception as e:
-                logger.error(f"保存签到数据失败: {e}")
-            logger.info(f"已重置{len(新签到数据)}条签到记录")
+                    文件路径 = JsonHandler.获取文件路径("玩家今天是否签到过.json", True)
+                    try:
+                        with open(文件路径, 'w', encoding='utf-8') as f:
+                            json.dump(新签到数据, f, ensure_ascii=False, indent=2)
+                        logger.info(f"签到数据已保存到: {文件路径}")
+                        logger.info(f"已重置{len(新签到数据)}条签到记录")
+                    except Exception as e:
+                        logger.error(f"保存签到数据失败: {e}")
+                else:
+                    # 如果签到数据为空，初始化一个空字典
+                    文件路径 = JsonHandler.获取文件路径("玩家今天是否签到过.json", True)
+                    try:
+                        with open(文件路径, 'w', encoding='utf-8') as f:
+                            json.dump({}, f, ensure_ascii=False, indent=2)
+                        logger.info(f"初始化签到数据文件: {文件路径}")
+                    except Exception as e:
+                        logger.error(f"初始化签到数据文件失败: {e}")
         except Exception as e:
             logger.error(f"检查和更新数据保质期时出错: {e}")
             import traceback
