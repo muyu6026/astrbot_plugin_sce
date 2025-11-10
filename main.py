@@ -198,6 +198,7 @@ class EmailService:
         self.project_id = project_id
         self.add_email_url = "https://adminapi-pd.spark.xd.com/api/v1/table/add"
         self.send_email_url = "https://adminapi-pd.spark.xd.com/api/v1/table/row"
+        self.get_emails_url = "https://adminapi-pd.spark.xd.com/api/v1/table/data"  # 添加获取邮件列表的URL
         self.table_id = "firm0_app_email_manager"
         self.session = requests.Session()
         self.max_retries = max_retries  # 设置重试次数
@@ -304,12 +305,13 @@ class EmailService:
             print(f"异常堆栈: {traceback.format_exc()}")
             return {"success": False, "message": error_msg, "error_type": "UNKNOWN_ERROR"}
     
-    async def send_email(self, email_data):
+    async def send_email(self, email_data, use_data_api=False):
         """
         异步发送邮件（根据C#代码实现）
         
         Args:
             email_data (dict): 邮件数据，包含标题、正文、收件人ID等
+            use_data_api (bool): 是否使用Data API获取邮件ID后再发送
             
         Returns:
             dict: 发送结果
@@ -317,12 +319,42 @@ class EmailService:
         try:
             print(f"准备发送邮件: {email_data.get('标题', '无标题')}")
             print(f"目标类型: {email_data.get('目标类型', 1)}，收件人ID: {email_data.get('收件人ID', '全体')}")
+            print(f"是否使用Data API: {use_data_api}")
             
             # 先验证token是否存在
             if not self.auth_token:
                 error_msg = "认证token为空，请先设置有效的token"
                 print(error_msg)
                 return {"success": False, "message": error_msg, "error_code": "TOKEN_EMPTY"}
+            
+            # 检查新建邮件参数是否齐全
+            required_params = ["标题", "正文"]
+            missing_params = []
+            
+            for param in required_params:
+                if not email_data.get(param) or not str(email_data.get(param)).strip():
+                    missing_params.append(param)
+                    
+            # 如果是个人邮件，检查收件人ID
+            if email_data.get("目标类型", 1) == 1:
+                required_params.append("收件人ID")
+                if not email_data.get("收件人ID"):
+                    missing_params.append("收件人ID")
+            
+            if missing_params:
+                error_msg = f"邮件参数不齐全，缺少以下必填项: {', '.join(missing_params)}"
+                print(error_msg)
+                return {"success": False, "message": error_msg, "error_code": "MISSING_REQUIRED_PARAMS"}
+            
+            # 记录邮件的唯一标识信息，用于后续查找
+            email_identifier = {
+                "title": email_data.get("标题"),
+                "target_type": email_data.get("目标类型", 1)
+            }
+            
+            # 如果是个人邮件，添加收件人ID到标识
+            if email_identifier["target_type"] == 1:
+                email_identifier["target"] = email_data.get("收件人ID")
             
             # 第一步：添加邮件到系统
             add_result = await self._add_email(email_data)
@@ -340,12 +372,64 @@ class EmailService:
             
             if not add_result:
                 return {"success": False, "message": "添加邮件失败: 未收到响应", "error_code": "NO_RESPONSE"}
-            if not add_result.get('success'):
+            
+            # 如果添加成功，获取row_id
+            row_id = add_result.get('row_id')
+            
+            # 如果启用了Data API并且没有获取到row_id，尝试通过Data API查找
+            if use_data_api and not row_id:
+                print("尝试通过Data API获取邮件ID...")
+                # 获取邮件列表
+                list_result = await self.get_email_list()
+                
+                if list_result.get("success"):
+                    emails = list_result.get("emails", [])
+                    print(f"通过Data API获取到 {len(emails)} 封邮件")
+                    
+                    # 尝试查找刚添加的邮件（可能需要根据更多条件优化）
+                    found_email = self.get_email_by_criteria(emails, email_identifier)
+                    
+                    if found_email:
+                        row_id = found_email.get("row_id")
+                        print(f"通过Data API成功找到邮件，row_id: {row_id}")
+                    else:
+                        print("通过Data API未找到对应的邮件，尝试其他方式...")
+            
+            # 如果添加失败但启用了Data API，可以尝试直接查找并发送
+            if not add_result.get('success') and use_data_api:
                 error_message = add_result.get('message', '添加邮件失败')
+                print(f"添加邮件失败: {error_message}，尝试通过Data API查找并发送邮件...")
+                
+                # 获取邮件列表
+                list_result = await self.get_email_list()
+                
+                if list_result.get("success"):
+                    emails = list_result.get("emails", [])
+                    print(f"通过Data API获取到 {len(emails)} 封邮件")
+                    
+                    # 尝试查找匹配的邮件
+                    found_email = self.get_email_by_criteria(emails, email_identifier)
+                    
+                    if found_email:
+                        row_id = found_email.get("row_id")
+                        print(f"通过Data API成功找到匹配的邮件，row_id: {row_id}")
+                        # 直接尝试触发发送
+                        trigger_result = self._trigger_email_send(row_id)
+                        if trigger_result.get("success"):
+                            return {
+                                "success": True,
+                                "message": "通过Data API找到邮件并成功发送",
+                                "row_id": row_id,
+                                "trigger_result": trigger_result,
+                                "used_data_api": True
+                            }
+                    else:
+                        print("通过Data API未找到匹配的邮件")
+                
+                # 如果通过Data API也无法找到或发送，返回原始错误
                 return {"success": False, "message": error_message, "error_code": "EMAIL_ADD_FAILED"}
             
-            # 第二步：触发发送（即使没有row_id也尝试触发，参考C#实现）
-            row_id = add_result.get('row_id')
+            # 第二步：触发发送（使用可能从Data API获取的row_id）
             response_structure = add_result.get('response_structure', [])
             raw_response = add_result.get('raw_response', '')
             has_dialog_box = add_result.get('has_dialog_box', False)
@@ -477,7 +561,7 @@ class EmailService:
             print(f"异常堆栈: {traceback.format_exc()}")
             return {"success": False, "message": error_msg, "error_code": "INTERNAL_ERROR"}
     
-    async def quick_send(self, title, content, recipient_id, item_id=0, item_count=0, money=0, attachment=""):
+    async def quick_send(self, title, content, recipient_id, item_id=0, item_count=0, money=0, attachment="", use_data_api=False):
         """
         异步快速发送邮件（根据C#代码实现）
         
@@ -489,6 +573,7 @@ class EmailService:
             item_count (int): 道具数量（保留兼容）
             money (int): 货币数量（保留兼容）
             attachment (str): 道具奖励字符串，如 "$p_95jd.lobby_resource.魂晶.root:999"
+            use_data_api (bool): 是否使用Data API获取邮件ID后再发送
             
         Returns:
             dict: 发送结果
@@ -551,9 +636,9 @@ class EmailService:
         
         print(f"构建的邮件数据: {json.dumps(email_data, ensure_ascii=False)}")
         
-        return await self.send_email(email_data)
+        return await self.send_email(email_data, use_data_api=use_data_api)
     
-    async def send_to_all(self, title, content, item_id=0, item_count=0, money=0, attachment=""):
+    async def send_to_all(self, title, content, item_id=0, item_count=0, money=0, attachment="", use_data_api=False):
         """
         异步发送全体邮件（根据C#代码实现）
         
@@ -564,6 +649,7 @@ class EmailService:
             item_count (int): 道具数量（保留兼容）
             money (int): 货币数量（保留兼容）
             attachment (str): 道具奖励字符串，如 "$p_95jd.lobby_resource.魂晶.root:999"
+            use_data_api (bool): 是否使用Data API获取邮件ID后再发送
             
         Returns:
             dict: 发送结果
@@ -583,7 +669,95 @@ class EmailService:
             "发件人": "系统管理员"
         }
         
-        return await self.send_email(email_data)
+        return await self.send_email(email_data, use_data_api=use_data_api)
+    
+    async def get_email_list(self, page=1, page_limit=10, search_key="", sort_key="id", sort_type="desc"):
+        """
+        获取邮件列表
+        
+        Args:
+            page (int): 页码
+            page_limit (int): 每页数量
+            search_key (str): 搜索关键字
+            sort_key (str): 排序字段
+            sort_type (str): 排序方式 (asc/desc)
+            
+        Returns:
+            dict: 邮件列表数据
+        """
+        try:
+            print(f"准备获取邮件列表，页码: {page}, 每页数量: {page_limit}")
+            
+            # 构建请求数据
+            request_data = {
+                "firm": self.project_id,
+                "table_id": self.table_id,
+                "page": page,
+                "page_limit": page_limit,
+                "search_key": search_key,
+                "search_options": [],
+                "sort_key": sort_key,
+                "sort_type": sort_type
+            }
+            
+            print(f"准备发送邮件列表请求到: {self.get_emails_url}")
+            print(f"请求数据: {json.dumps(request_data, ensure_ascii=False)}")
+            print(f"当前使用的token: {self.auth_token[:20]}...{self.auth_token[-8:]}")
+            
+            response = self.session.post(
+                self.get_emails_url,
+                data=json.dumps(request_data),
+                timeout=30
+            )
+            
+            print(f"邮件列表响应状态码: {response.status_code}")
+            print(f"邮件列表响应内容: {response.text}")
+            
+            if response.status_code == 200:
+                try:
+                    result = response.json()
+                    return {
+                        "success": True,
+                        "data": result,
+                        "emails": result.get("list", []),
+                        "total": result.get("page_info", {}).get("total", 0)
+                    }
+                except json.JSONDecodeError:
+                    error_msg = "邮件列表响应解析失败"
+                    print(f"{error_msg}: {response.text}")
+                    return {"success": False, "message": error_msg}
+            else:
+                error_msg = f"获取邮件列表失败: {response.status_code} {response.reason}"
+                print(error_msg)
+                return {"success": False, "message": error_msg}
+                
+        except Exception as e:
+            error_msg = f"获取邮件列表异常: {str(e)}"
+            print(error_msg)
+            import traceback
+            print(f"异常堆栈: {traceback.format_exc()}")
+            return {"success": False, "message": error_msg}
+    
+    def get_email_by_criteria(self, emails, criteria):
+        """
+        根据条件从邮件列表中查找邮件
+        
+        Args:
+            emails (list): 邮件列表
+            criteria (dict): 查找条件
+            
+        Returns:
+            dict or None: 找到的邮件或None
+        """
+        for email in emails:
+            match = True
+            for key, value in criteria.items():
+                if key in email and email[key] != value:
+                    match = False
+                    break
+            if match:
+                return email
+        return None
     
     async def _add_email(self, email_data):
         """
@@ -634,10 +808,32 @@ class EmailService:
         # 执行请求（带重试逻辑）
         for attempt in range(self.max_retries + 1):
             try:
-                print(f"准备添加邮件到系统 (尝试 {attempt + 1}/{self.max_retries + 1})")
-                print(f"原始邮件数据: {email_data}")
+                print(f"准备添加邮件到系统 (尝试 {attempt + 1}/{self.max_retries + 1})\n原始邮件数据: {email_data}")
                 
                 request_data = prepare_request_data()
+                
+                # 发送前进行额外的参数验证
+                payload = request_data.get('payload', {})
+                target_id = payload.get('target', '')
+                
+                # 验证用户ID格式
+                if target_id and not str(target_id).strip().isdigit():
+                    error_msg = f"参数验证失败: 用户ID '{target_id}' 必须只包含数字"
+                    logger.error(error_msg)
+                    return {
+                        "success": False,
+                        "message": error_msg,
+                        "error_code": "INVALID_TARGET_ID",
+                        "target_id": target_id
+                    }
+                
+                # 验证其他关键参数
+                if not payload.get('attachment'):
+                    logger.warning("警告: attachment参数为空，可能导致请求失败")
+                if not payload.get('content'):
+                    logger.warning("警告: content参数为空，可能导致请求失败")
+                if not payload.get('title'):
+                    logger.warning("警告: title参数为空，可能导致请求失败")
                 
                 print(f"准备发送邮件请求到: {self.add_email_url}")
                 print(f"请求数据: {json.dumps(request_data, ensure_ascii=False)}")
@@ -655,41 +851,68 @@ class EmailService:
                 # 处理400错误（请求参数问题）
                 if response.status_code == 400:
                     error_detail = f"收到400 Bad Request错误，请求参数可能有问题"
-                    print(error_detail)
-                    print(f"详细响应内容: {response.text}")
-                    print(f"完整请求数据: {json.dumps(request_data, ensure_ascii=False)}")
+                    logger.error(error_detail)
+                    logger.error(f"详细响应内容: {response.text}")
+                    logger.error(f"完整请求数据: {json.dumps(request_data, ensure_ascii=False)}")
                     
                     # 分析可能的问题：验证用户ID格式
                     target_id = request_data.get('payload', {}).get('target', '')
-                    if target_id and not str(target_id).strip().isdigit():
-                        format_warning = f"警告: 目标用户ID '{target_id}' 可能格式不正确，这可能是400错误的原因"
-                        print(format_warning)
-                        error_detail += "，" + format_warning
-                    
-                    # 获取payload中的其他关键参数信息
                     payload = request_data.get('payload', {})
+                    
+                    # 详细分析可能的错误原因
+                    potential_issues = []
+                    if target_id and not str(target_id).strip().isdigit():
+                        issue = f"目标用户ID '{target_id}' 格式不正确"
+                        potential_issues.append(issue)
                     if not payload.get('attachment'):
-                        print("警告: attachment参数为空，可能导致请求失败")
-                        error_detail += "，attachment参数为空"
+                        potential_issues.append("attachment参数为空")
                     if not payload.get('content'):
-                        print("警告: content参数为空，可能导致请求失败")
-                        error_detail += "，content参数为空"
+                        potential_issues.append("content参数为空")
+                    if not payload.get('title'):
+                        potential_issues.append("title参数为空")
+                    
+                    # 构建详细错误信息
+                    if potential_issues:
+                        error_detail += ": " + ", ".join(potential_issues)
+                    
+                    # 尝试修复用户ID格式（如果有问题）
+                    if target_id and not str(target_id).strip().isdigit():
+                        import re
+                        cleaned_id = re.sub(r'\D', '', str(target_id))
+                        if cleaned_id:
+                            logger.info(f"尝试自动修复用户ID: {target_id} -> {cleaned_id}")
+                            payload['target'] = cleaned_id
+                            request_data['payload'] = payload
+                            # 重新发送请求
+                            logger.info("使用修复后的用户ID重新发送请求...")
+                            response = self.session.post(
+                                self.add_email_url, 
+                                data=json.dumps(request_data),
+                                timeout=30
+                            )
+                            # 检查修复后是否成功
+                            if response.status_code == 200:
+                                logger.info("使用修复后的用户ID成功发送请求")
+                                # 继续处理成功响应
+                            else:
+                                logger.error(f"修复用户ID后仍然失败，状态码: {response.status_code}")
                     
                     # 如果是最后一次尝试，直接返回详细错误
                     if attempt >= self.max_retries:
                         error_msg = f"HTTP错误: 400 Bad Request，请求参数问题: {error_detail}"
-                        print(error_msg)
+                        logger.error(error_msg)
                         return {
                             "success": False, 
                             "message": error_msg, 
                             "response": response.text, 
                             "error_code": "BAD_REQUEST",
                             "request_data": request_data,
-                            "target_id": target_id
+                            "target_id": target_id,
+                            "potential_issues": potential_issues
                         }
                     
                     # 等待后重试
-                    print("等待2秒后重试...")
+                    logger.info("等待2秒后重试...")
                     import time
                     time.sleep(2)
                     continue
@@ -1514,7 +1737,7 @@ class MyPlugin(Star):
         """发送消息封装函数"""
         yield event.plain_result(消息内容)
 
-    async def send_personal_reward_email(self, 认证令牌, 项目ID, 奖励内容, 发送的用户, 邮件标题, 邮件正文, 游戏名称=None):
+    async def send_personal_reward_email(self, 认证令牌, 项目ID, 奖励内容, 发送的用户, 邮件标题, 邮件正文, 游戏名称=None, use_data_api=True):
         """发送个人奖励邮件（适配C#邮件格式）"""
         try:
             # 如果没有提供游戏名称，尝试从游戏配置中获取第一个
@@ -1530,17 +1753,11 @@ class MyPlugin(Star):
             if 奖励内容 and isinstance(奖励内容, str) and 奖励内容.strip():
                 # 检查奖励内容是否已经包含数量信息（格式如：xxx:数字）
                 if ":" in 奖励内容:
-                    # 确保奖励字符串有正确的$前缀
-                    # 三重判断：如果已经有$前缀，保持不变；如果只有一个$前缀，添加一个$；如果没有$前缀，添加两个$
-                    if 奖励内容.startswith("$"):
-                        # 已经有两个$前缀，保持不变
-                        pass
-                    elif 奖励内容.startswith("$"):
-                        # 只有一个$前缀，添加一个$
+                    # 确保奖励字符串有正确的$前缀（只检查一次）
+                    if not 奖励内容.startswith("$"):
                         奖励内容 = "$" + 奖励内容
-                    else:
-                        # 没有$前缀，添加两个$
-                        奖励内容 = "$" + 奖励内容
+                        logger.info(f"为奖励字符串添加$前缀: '{奖励内容}'")
+                    
                     attachment = 奖励内容  # 使用格式化后的完整奖励字符串
                     logger.info(f"使用传入的完整奖励字符串作为附件: '{奖励内容}'")
                     
@@ -1563,33 +1780,21 @@ class MyPlugin(Star):
                     except Exception as e:
                         logger.warning(f"解析奖励字符串异常（仅影响显示）: {str(e)}")
                 else:
-                    # 如果没有数量信息，确保有$前缀并默认为1个
-                    # 三重判断：如果已经有$前缀，保持不变；如果只有一个$前缀，添加一个$；如果没有$前缀，添加两个$
-                    if 奖励内容.startswith("$"):
-                        # 已经有两个$前缀，保持不变
-                        pass
-                    elif 奖励内容.startswith("$"):
-                        # 只有一个$前缀，添加一个$
+                    # 如果没有数量信息，确保有$前缀并默认为1个（只检查一次）
+                    if not 奖励内容.startswith("$"):
                         奖励内容 = "$" + 奖励内容
-                    else:
-                        # 没有$前缀，添加两个$
-                        奖励内容 = "$" + 奖励内容
+                        logger.info(f"为奖励字符串添加$前缀: '{奖励内容}'")
+                    
                     attachment = 奖励内容
                     logger.info(f"使用传入的奖励ID作为附件: '{奖励内容}'")
             # 如果没有传入有效奖励内容，再尝试从游戏配置获取
             elif 游戏名称 in self.game_configs and "发送的奖励" in self.game_configs[游戏名称]:
                 奖励字符串 = self.game_configs[游戏名称]["发送的奖励"]
-                # 确保奖励字符串有正确的$前缀
-                # 三重判断：如果已经有$前缀，保持不变；如果只有一个$前缀，添加一个$；如果没有$前缀，添加两个$
-                if 奖励字符串.startswith("$"):
-                    # 已经有两个$前缀，保持不变
-                    pass
-                elif 奖励字符串.startswith("$"):
-                    # 只有一个$前缀，添加一个$
+                # 确保奖励字符串有正确的$前缀（只检查一次）
+                if not 奖励字符串.startswith("$"):
                     奖励字符串 = "$" + 奖励字符串
-                else:
-                    # 没有$前缀，添加两个$
-                    奖励字符串 = "$" + 奖励字符串
+                    logger.info(f"为奖励字符串添加$前缀: '{奖励字符串}'")
+                
                 logger.info(f"从游戏配置获取的奖励字符串: '{奖励字符串}'")
                 attachment = 奖励字符串
                 
@@ -1633,7 +1838,8 @@ class MyPlugin(Star):
                 max_retries=3
             )
             print("[邮件] 开始调用邮件服务发送邮件...")
-            result = await email_service.quick_send(邮件标题, 邮件正文, 发送的用户, attachment=attachment)
+            print(f"[邮件] 启用Data API: {use_data_api}")
+            result = await email_service.quick_send(邮件标题, 邮件正文, 发送的用户, attachment=attachment, use_data_api=use_data_api)
             print(f"[邮件] 邮件服务返回结果: {result}")
             
             # 检查是否是token相关错误或400错误
@@ -2379,22 +2585,13 @@ class MyPlugin(Star):
                             # 构建开奖通知消息
                             通知消息=f"🎊 开奖结果通知 🎊\n\n🎮 游戏名称：{游戏名称}\n👤 获奖者：{获奖者ID}\n🎁 奖励：{奖励名称} x{奖励数量}\n\n奖励正在发放中，请留意系统邮件。"
                             logger.info(f"准备发送开奖通知到群聊: {群聊ID}")
-                            # 直接发送消息
-                            await event.plain_result(通知消息)
+                            # 在异步函数中使用异步迭代
+                            async for result in self.发送消息(event, 通知消息):
+                                yield result
                         except Exception as notify_error:
                             logger.error(f"发送开奖通知到群聊时出错: {notify_error}")
-                            # 尝试备用发送方式
-                            try:
-                                backup_event = AstrMessageEvent(
-                                    message_str='',
-                                    message_obj=None,
-                                    platform_meta={'group_id': 群聊ID},
-                                    session_id=f'lottery_notify_{抽奖ID}'
-                                )
-                                await backup_event.plain_result(通知消息)
-                                logger.info("使用备用方式发送开奖通知成功")
-                            except Exception as backup_error:
-                                logger.error(f"备用方式发送开奖通知也失败: {backup_error}")
+                            # 简化备用方案：直接记录错误，不再尝试创建新的事件对象
+                            logger.warning(f"群聊通知失败，已记录。奖励仍将发放，但玩家需自行查看。")
                 except Exception as e:
                     logger.error(f"处理群聊通知时出错: {e}")
                 
