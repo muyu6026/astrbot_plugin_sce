@@ -300,9 +300,9 @@ class EmailService:
             print(f"异常堆栈: {traceback.format_exc()}")
             return {"success": False, "message": error_msg, "error_type": "UNKNOWN_ERROR"}
     
-    def send_email(self, email_data):
+    async def send_email(self, email_data):
         """
-        发送邮件（根据C#代码实现）
+        异步发送邮件（根据C#代码实现）
         
         Args:
             email_data (dict): 邮件数据，包含标题、正文、收件人ID等
@@ -321,7 +321,7 @@ class EmailService:
                 return {"success": False, "message": error_msg, "error_code": "TOKEN_EMPTY"}
             
             # 第一步：添加邮件到系统
-            add_result = self._add_email(email_data)
+            add_result = await self._add_email(email_data)
             print(f"添加邮件结果: {add_result}")
             
             # 检查是否是401错误
@@ -489,9 +489,9 @@ class EmailService:
             print(f"异常堆栈: {traceback.format_exc()}")
             return {"success": False, "message": error_msg, "error_code": "INTERNAL_ERROR"}
     
-    def quick_send(self, title, content, recipient_id, item_id=0, item_count=0, money=0, attachment=""):
+    async def quick_send(self, title, content, recipient_id, item_id=0, item_count=0, money=0, attachment=""):
         """
-        快速发送邮件（根据C#代码实现）
+        异步快速发送邮件（根据C#代码实现）
         
         Args:
             title (str): 邮件标题
@@ -524,11 +524,11 @@ class EmailService:
             "发件人": "系统管理员"
         }
         
-        return self.send_email(email_data)
+        return await self.send_email(email_data)
     
-    def send_to_all(self, title, content, item_id=0, item_count=0, money=0, attachment=""):
+    async def send_to_all(self, title, content, item_id=0, item_count=0, money=0, attachment=""):
         """
-        发送全体邮件（根据C#代码实现）
+        异步发送全体邮件（根据C#代码实现）
         
         Args:
             title (str): 邮件标题
@@ -556,9 +556,9 @@ class EmailService:
             "发件人": "系统管理员"
         }
         
-        return self.send_email(email_data)
+        return await self.send_email(email_data)
     
-    def _add_email(self, email_data):
+    async def _add_email(self, email_data):
         """
         添加邮件到系统（根据C#代码实现）
         
@@ -635,8 +635,18 @@ class EmailService:
                         print(error_msg)
                         return {"success": False, "message": error_msg, "response": response.text}
                     
-                    # 尝试刷新token（这里我们只能提示，实际刷新需要外部调用）
-                    print("需要刷新token，请使用刷新token命令或等待自动刷新")
+                    # 立即尝试刷新token
+                    print("尝试自动刷新token...")
+                    refresh_result = await self._refresh_all_games()
+                    
+                    if refresh_result.get("success") and refresh_result.get("token"):
+                        new_token = refresh_result["token"]
+                        print(f"成功刷新token，后10位: {new_token[-10:]}")
+                        self._update_auth_headers(new_token)
+                        # 立即重试请求
+                        continue
+                    else:
+                        print(f"token刷新失败: {refresh_result.get('message')}")
                     
                     # 尝试从cookie中获取新token（如果有）
                     if 'token' in self.session.cookies:
@@ -754,7 +764,7 @@ class MyPlugin(Star):
         self.token_file = "系统token存储.json"
         
         # 初始化默认token（仅作为备份使用）
-        default_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyaW5mbyI6eyJ1c2VySWQiOjE0MDgxNzcxODUsIm5hbWUiOiLmmq7pm6giLCJhdmF0YXIiOiJodHRwczovL2ltZzMudGFwaW1nLmNvbS9hdmF0YXJzL2V0YWcvRnVSVnh1d1ZiM21BRTRTSWVCNkxhbkQ2UjltbC5wbmc_aW1hZ2VNb2dyMi9hdXRvLW9yaWVudC9zdHJpcC90aHVtYm5haWwvITI3MHgyNzByL2dyYXZpdHkvQ2VudGVyL2Nyb3AvMjcweDI3MC9mb3JtYXQvanBnL2ludGVybGFjZS8xL3F1YWxpdHkvODAiLCJ1bmlvbl9pZCI6IkMzNXc1YTEtaHV5akVMVzZNWXBaY0Vxd1pQMlUzM1c2RFVlbGg4blJMUWhnYXR1RCIsInRva2VuIjoiOGZjMTJhOTA2NThmY2Q0ODkzNzIzMDQ3ODdkYTA0ODllMWNkZDJiNTE1NjUwZDdjMTIxMTBmZTI4MDQ2YzY3MSIsInRva2VuX3NlY3JldCI6IjYyN2VkODZmMTNhMDZhODE4ZWQyODdmODg1NWZhNjQzYTIwYWJlMTkifSwiaWF0IjoxNzYyNjg0MjY3LCJleHAiOjE3NjI3NzA2Njd9.aB2UFNFB1LKr8K4UKier_xRt-kCuGZx2beCgLj5tQxE"
+        default_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyaW5mbyI6eyJ1c2VySWQiOjE0MDgxNzcxODUsIm5hbWUiOiLmmq7pm6giLCJhdmF0YXIiOiJodHRwczovL2ltZzMudGFwaW1nLmNvbS9hdmF0YXJzL2V0YWcvRnVSVnh1d1ZiM21BRTRTSWVCNkxhbkQ2UjltbC5wbmc_aW1hZ2VNb2dyMi9hdXRvLW9yaWVudC9zdHJpcC90aHVtYm5haWwvITI3MHgyNzByL2dyYXZpdHkvQ2VudGVyL2Nyb3AvMjcweDI3MC9mb3JtYXQvanBnL2ludGVybGFjZS8xL3F1YWxpdHkvODAiLCJ1bmlvbl9pZCI6IkMzNXc1YTEtaHV5akVMVzZNWXBaY0Vxd1pQMlUzM1c2RFVlbGg4blJMUWhnYXR1RCIsInRva2VuIjoiMGIyMGY0NTY2YzRmNTUzNjhkYzM4MjljZWYxNjA0MGIxMDQ1N2I3ZjZjMjkwYmQ4OWUzNTQ4NDkyODM5ZDVjMSIsInRva2VuX3NlY3JldCI6ImQzNTYyNTE0MmZjNDZhMDhmOTM1NzY5MWU3MzZiOTlmYTdhNThjZTQifSwiaWF0IjoxNzYyNzcxNDExLCJleHAiOjE3NjI4NTc4MTF9.Oxa5Rj7UUeosHXS-kQYhgyl7EQ4JSWziFlcRSoC8XSg"
         
         # 优先从token文件加载auth_token
         try:
@@ -976,7 +986,7 @@ class MyPlugin(Star):
                 
                 # 更新当前token
                 self.current_token = token
-                logger.info(f"已保存新token，长度: {len(token)} 字符，尝试次数: {attempt + 1}")
+                logger.info(f"已保存新token，长度: {len(token)} 字符，后10位: {token[-10:]}，尝试次数: {attempt + 1}")
                 return True
 
             except Exception as e:
@@ -1060,17 +1070,20 @@ class MyPlugin(Star):
     async def _simulate_browser_refresh(self, game_name, url, session):
         """模拟真实浏览器行为刷新游戏网页，增强token管理"""
         # 导入所需模块
+        import time
+        from urllib.parse import urlparse, parse_qs
         max_retries = 5  # 增加重试次数
         base_delay = 5  # 增加基础延迟时间
         
-        # 更真实的浏览器headers
+        # 更真实的浏览器headers，根据抓包数据更新
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36 Edg/142.0.0.0',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
             'Connection': 'keep-alive',
             'Upgrade-Insecure-Requests': '1',
-            'Cache-Control': 'max-age=0',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache',
             'TE': 'trailers'
         }
         
@@ -1082,12 +1095,34 @@ class MyPlugin(Star):
                 session.headers.clear()
                 session.headers.update(headers)
                 
+                # 添加引用站点，更接近浏览器行为
+                parsed_url = urlparse(url)
+                session.headers.update({'Referer': f"https://{parsed_url.netloc}/"})
+                
                 # 更全面的token传递方式
                 if self.current_token:
                     # 通过多种方式传递token以增加成功率
-                    session.cookies.set('token', self.current_token, path='/', domain=urlparse(url).netloc)
+                    session.cookies.set('token', self.current_token, path='/', domain=parsed_url.netloc)
                     session.headers.update({'Authorization': f'Bearer {self.current_token}'})
                     session.headers.update({'X-Token': self.current_token})
+                    logger.debug(f"已设置token: {self.current_token[:20]}...{self.current_token[-10:]}")
+                
+                # 特殊处理：如果是主要网站，尝试访问主页
+                main_site_url = "https://developer.spark.xd.com/"
+                if urlparse(url).netloc == urlparse(main_site_url).netloc:
+                    try:
+                        logger.info(f"访问主站: {main_site_url}")
+                        main_response = session.get(main_site_url, headers=session.headers, timeout=30, allow_redirects=True)
+                        logger.info(f"主站访问状态码: {main_response.status_code}")
+                        
+                        # 检查主站响应中是否有token
+                        main_token = None
+                        if 'token' in main_response.cookies:
+                            main_token = main_response.cookies['token']
+                            logger.info(f"从主站获取到新token，长度: {len(main_token)}")
+                            return True, main_token
+                    except Exception as e:
+                        logger.warning(f"访问主站失败: {e}")
                 
                 # 1. 首先发送一个预检OPTIONS请求
                 try:
@@ -1123,9 +1158,17 @@ class MyPlugin(Star):
                 elif 'X-Token' in response.headers:
                     new_token = response.headers['X-Token']
                 
+                # 特殊处理：尝试从重定向链中获取token
+                if not new_token and response.history:
+                    for hist_response in response.history:
+                        if 'token' in hist_response.cookies:
+                            new_token = hist_response.cookies['token']
+                            logger.info(f"从历史重定向响应中获取到token")
+                            break
+                
                 # 如果找到新token且有效，返回
                 if new_token and new_token != self.current_token and len(new_token) > 50:  # 简单验证token长度
-                    logger.info(f"发现新token，游戏: {game_name}, 长度: {len(new_token)}")
+                    logger.info(f"发现新token，游戏: {game_name}, 长度: {len(new_token)}, 后10位: {new_token[-10:]}")
                     return True, new_token
                 
                 # 特殊处理400错误
@@ -1136,10 +1179,40 @@ class MyPlugin(Star):
                     try:
                         response = session.get(url, headers=session.headers, params=params, timeout=30)
                         logger.info(f"带参数的刷新请求状态码: {response.status_code}")
+                        
+                        # 再次检查token
+                        if 'token' in response.cookies:
+                            param_token = response.cookies['token']
+                            if param_token and param_token != self.current_token:
+                                logger.info(f"从带参数请求中获取到新token")
+                                return True, param_token
+                        
                         if response.status_code == 200:
                             return True, new_token
                     except Exception as e:
                         logger.error(f"带参数刷新失败: {e}")
+                
+                # 特殊处理OAuth回调流程（根据抓包数据）
+                if 'auth/callback' in url:
+                    logger.info(f"处理OAuth回调URL: {url}")
+                    # 提取code和state参数
+                    parsed = urlparse(url)
+                    query_params = parse_qs(parsed.query)
+                    if 'code' in query_params and 'state' in query_params:
+                        logger.info(f"发现OAuth回调参数，code: {query_params['code'][0][:10]}..., state: {query_params['state'][0]}")
+                        # 尝试使用回调参数获取token
+                        callback_url = f"https://{parsed.netloc}/api/auth/exchange?code={query_params['code'][0]}&state={query_params['state'][0]}"
+                        try:
+                            exchange_response = session.get(callback_url, headers=session.headers, timeout=30)
+                            logger.info(f"Token交换请求状态码: {exchange_response.status_code}")
+                            
+                            # 检查交换响应中的token
+                            if 'token' in exchange_response.cookies:
+                                exchange_token = exchange_response.cookies['token']
+                                logger.info(f"从OAuth交换获取到新token")
+                                return True, exchange_token
+                        except Exception as e:
+                            logger.warning(f"Token交换失败: {e}")
                 
                 # 检查响应是否表示成功
                 if 200 <= response.status_code < 300:
@@ -1157,6 +1230,14 @@ class MyPlugin(Star):
                             session.cookies.set('token', self.current_token)
                         response = session.get(url, headers=session.headers, timeout=30)
                         logger.info(f"清除cookie后重试状态码: {response.status_code}")
+                        
+                        # 再次检查token
+                        if 'token' in response.cookies:
+                            retry_token = response.cookies['token']
+                            if retry_token and retry_token != self.current_token:
+                                logger.info(f"从重试请求中获取到新token")
+                                return True, retry_token
+                                
                         return response.status_code == 200, None
                     except Exception as e:
                         logger.error(f"清除cookie后重试失败: {e}")
@@ -1227,6 +1308,7 @@ class MyPlugin(Star):
                         final_token = game_token
                         # 立即保存新token
                         self.current_token = final_token
+                        logger.info(f"从游戏 {game_name} 获取到新token，后10位: {final_token[-10:]}")
                         self._save_token(final_token)
                         # 获取到token后可以提前退出
                         break
@@ -1255,7 +1337,7 @@ class MyPlugin(Star):
         if new_token:
             save_success = self._save_token(new_token)
             if save_success:
-                logger.info(f"成功保存新token")
+                logger.info(f"成功保存新token，后10位: {new_token[-10:]}")
                 return {
                     "success": True,
                     "token": new_token,
@@ -1440,7 +1522,7 @@ class MyPlugin(Star):
                 project_id=项目ID,
                 max_retries=3
             )
-            result = email_service.quick_send(邮件标题, 邮件正文, 发送的用户, attachment=attachment)
+            result = await email_service.quick_send(邮件标题, 邮件正文, 发送的用户, attachment=attachment)
             
             # 检查是否是token相关错误或400错误
             message = result.get('message', '')
@@ -1472,7 +1554,7 @@ class MyPlugin(Star):
                             max_retries=2
                         )
                         # 重新发送邮件
-                        retry_result = new_email_service.quick_send(邮件标题, 邮件正文, 发送的用户, attachment=attachment)
+                        retry_result = await new_email_service.quick_send(邮件标题, 邮件正文, 发送的用户, attachment=attachment)
                         
                         if retry_result.get('success'):
                             logger.info("使用新token重新发送邮件成功")
