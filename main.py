@@ -226,10 +226,11 @@ class EmailService:
             return {"success": False, "message": "行ID为空"}
         
         try:
+            # 构建更完整的请求数据，确保payload包含必要信息
             request_data = {
                 "firm": self.project_id,
                 "functor": "send",
-                "payload": {},
+                "payload": {"action": "send_email"},  # 添加必要的payload参数
                 "row_id": row_id,
                 "table_id": self.table_id
             }
@@ -505,30 +506,47 @@ class EmailService:
         Returns:
             dict: 发送结果
         """
-        # 记录传入的完整奖励字符串
-        print(f"quick_send方法收到的完整奖励字符串: '{attachment}'")
+        # 记录传入的参数
+        print(f"quick_send方法调用参数 - 标题: '{title}', 收件人ID: '{recipient_id}', 奖励字符串: '{attachment}'")
+        
+        # 验证必填字段
+        if not title or not str(title).strip():
+            return {"success": False, "message": "邮件标题不能为空", "error_code": "EMPTY_TITLE"}
+        if not content or not str(content).strip():
+            return {"success": False, "message": "邮件内容不能为空", "error_code": "EMPTY_CONTENT"}
+        if not recipient_id:
+            return {"success": False, "message": "收件人ID不能为空", "error_code": "EMPTY_RECIPIENT"}
         
         # 验证并清理recipient_id，确保它是一个有效的数字格式用户ID
-        if recipient_id:
-            # 清理空格和不可见字符
-            cleaned_recipient_id = str(recipient_id).strip()
-            # 验证是否只包含数字
-            if not cleaned_recipient_id.isdigit():
-                print(f"警告：收件人ID '{recipient_id}' 包含非数字字符，可能导致400错误")
-                # 尝试提取数字部分（如果是混合格式）
-                import re
-                numbers_only = re.sub(r'\D', '', cleaned_recipient_id)
-                if numbers_only:
-                    print(f"已提取数字部分: {numbers_only}")
-                    recipient_id = numbers_only
-                else:
-                    print("无法从收件人ID中提取有效的数字，将使用原ID但可能导致错误")
+        # 清理空格和不可见字符
+        cleaned_recipient_id = str(recipient_id).strip()
+        # 验证是否只包含数字
+        if not cleaned_recipient_id.isdigit():
+            print(f"警告：收件人ID '{recipient_id}' 包含非数字字符，可能导致400错误")
+            # 尝试提取数字部分（如果是混合格式）
+            import re
+            numbers_only = re.sub(r'\D', '', cleaned_recipient_id)
+            if numbers_only:
+                print(f"已提取数字部分: {numbers_only}")
+                recipient_id = numbers_only
             else:
-                recipient_id = cleaned_recipient_id
+                print("无法从收件人ID中提取有效的数字，将使用原ID但可能导致错误")
+                return {"success": False, "message": f"无效的收件人ID格式: {recipient_id}", "error_code": "INVALID_RECIPIENT_FORMAT"}
+        else:
+            recipient_id = cleaned_recipient_id
         
         print(f"清理后的收件人ID: '{recipient_id}'")
         
-        #直接传递完整的奖励字符串，不做任何修改或分割
+        # 验证奖励字符串格式（如果提供）
+        if attachment:
+            # 确保奖励字符串格式正确，包含必要的分隔符
+            if ':' not in attachment:
+                print(f"警告：奖励字符串格式可能不正确，缺少分隔符':': '{attachment}'")
+                # 简单检查格式是否符合预期模式
+                if not re.search(r'\$[\w\.]+:\d+', attachment):
+                    print(f"奖励字符串 '{attachment}' 可能不符合预期格式")
+        
+        # 构建完整的邮件数据
         email_data = {
             "标题": title,
             "正文": content,
@@ -543,6 +561,8 @@ class EmailService:
             "环境": "formal",
             "发件人": "系统管理员"
         }
+        
+        print(f"构建的邮件数据: {json.dumps(email_data, ensure_ascii=False)}")
         
         return await self.send_email(email_data)
     
@@ -647,19 +667,39 @@ class EmailService:
                 
                 # 处理400错误（请求参数问题）
                 if response.status_code == 400:
-                    print(f"收到400 Bad Request错误，请求参数可能有问题")
+                    error_detail = f"收到400 Bad Request错误，请求参数可能有问题"
+                    print(error_detail)
                     print(f"详细响应内容: {response.text}")
+                    print(f"完整请求数据: {json.dumps(request_data, ensure_ascii=False)}")
                     
                     # 分析可能的问题：验证用户ID格式
                     target_id = request_data.get('payload', {}).get('target', '')
                     if target_id and not str(target_id).strip().isdigit():
-                        print(f"警告: 目标用户ID '{target_id}' 可能格式不正确，这可能是400错误的原因")
+                        format_warning = f"警告: 目标用户ID '{target_id}' 可能格式不正确，这可能是400错误的原因"
+                        print(format_warning)
+                        error_detail += "，" + format_warning
+                    
+                    # 获取payload中的其他关键参数信息
+                    payload = request_data.get('payload', {})
+                    if not payload.get('attachment'):
+                        print("警告: attachment参数为空，可能导致请求失败")
+                        error_detail += "，attachment参数为空"
+                    if not payload.get('content'):
+                        print("警告: content参数为空，可能导致请求失败")
+                        error_detail += "，content参数为空"
                     
                     # 如果是最后一次尝试，直接返回详细错误
                     if attempt >= self.max_retries:
-                        error_msg = f"HTTP错误: 400 Bad Request，请求参数问题"
+                        error_msg = f"HTTP错误: 400 Bad Request，请求参数问题: {error_detail}"
                         print(error_msg)
-                        return {"success": False, "message": error_msg, "response": response.text, "error_code": "BAD_REQUEST"}
+                        return {
+                            "success": False, 
+                            "message": error_msg, 
+                            "response": response.text, 
+                            "error_code": "BAD_REQUEST",
+                            "request_data": request_data,
+                            "target_id": target_id
+                        }
                     
                     # 等待后重试
                     print("等待2秒后重试...")
@@ -806,7 +846,7 @@ class MyPlugin(Star):
         self.token_file = "系统token存储.json"
         
         # 初始化默认token（仅作为备份使用）
-        default_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyaW5mbyI6eyJ1c2VySWQiOjE0MDgxNzcxODUsIm5hbWUiOiLmmq7pm6giLCJhdmF0YXIiOiJodHRwczovL2ltZzMudGFwaW1nLmNvbS9hdmF0YXJzL2V0YWcvRnVSVnh1d1ZiM21BRTRTSWVCNkxhbkQ2UjltbC5wbmc_aW1hZ2VNb2dyMi9hdXRvLW9yaWVudC9zdHJpcC90aHVtYm5haWwvITI3MHgyNzByL2dyYXZpdHkvQ2VudGVyL2Nyb3AvMjcweDI3MC9mb3JtYXQvanBnL2ludGVybGFjZS8xL3F1YWxpdHkvODAiLCJ1bmlvbl9pZCI6IkMzNXc1YTEtaHV5akVMVzZNWXBaY0Vxd1pQMlUzM1c2RFVlbGg4blJMUWhnYXR1RCIsInRva2VuIjoiMGIyMGY0NTY2YzRmNTUzNjhkYzM4MjljZWYxNjA0MGIxMDQ1N2I3ZjZjMjkwYmQ4OWUzNTQ4NDkyODM5ZDVjMSIsInRva2VuX3NlY3JldCI6ImQzNTYyNTE0MmZjNDZhMDhmOTM1NzY5MWU3MzZiOTlmYTdhNThjZTQifSwiaWF0IjoxNzYyNzcxNDExLCJleHAiOjE3NjI4NTc4MTF9.Oxa5Rj7UUeosHXS-kQYhgyl7EQ4JSWziFlcRSoC8XSg"
+        default_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyaW5mbyI6eyJ1c2VySWQiOjE0MDgxNzcxODUsIm5hbWUiOiLmmq7pm6giLCJhdmF0YXIiOiJodHRwczovL2ltZzMudGFwaW1nLmNvbS9hdmF0YXJzL2V0YWcvRnVSVnh1d1ZiM21BRTRTSWVCNkxhbkQ2UjltbC5wbmc_aW1hZ2VNb2dyMi9hdXRvLW9yaWVudC9zdHJpcC90aHVtYm5haWwvITI3MHgyNzByL2dyYXZpdHkvQ2VudGVyL2Nyb3AvMjcweDI3MC9mb3JtYXQvanBnL2ludGVybGFjZS8xL3F1YWxpdHkvODAiLCJ1bmlvbl9pZCI6IkMzNXc1YTEtaHV5akVMVzZNWXBaY0Vxd1pQMlUzM1c2RFVlbGg4blJMUWhnYXR1RCIsInRva2VuIjoiMTYzMGQ5MmQ5MmRjZWFiNDQwNGUxZTgyMTAyOWI0ODY2NjVkNWNmOWNkMDFkODM4ZWM5MzYyNjA2YzJhZjQwNSIsInRva2VuX3NlY3JldCI6Ijc2ZmMzY2QyYzA5ZGIyMzk2NTZmZDM1NjcyNzdhOTAzMTY4NGI5ZjUifSwiaWF0IjoxNzYyNzcyMjYxLCJleHAiOjE3NjI4NTg2NjF9.sMECwUYEtFEr_F4HoU1qjE9S2IvxNrw0tlqY34j2PDg"
         
         # 优先从token文件加载auth_token
         try:
