@@ -861,28 +861,28 @@ class MyPlugin(Star):
         self.game_configs = {
             "捉妖:钟馗": {
                 "项目ID": "p_95jd",
-                "发送的奖励": "$p_95jd.lobby_resource.魂晶.root:999",
+                "发送的奖励": "$$p_95jd.lobby_resource.魂晶.root:999",
                 "URL": "https://developer.spark.xd.com/dashboard/p_95jd/firm0_lv_2_4_1"
             },
             "游戏2": {
                 "项目ID": "p_95jd",
-                "发送的奖励": "$p_95jd.lobby_resource.魂晶.root:100",
+                "发送的奖励": "$$p_95jd.lobby_resource.魂晶.root:999",
                 "URL": "https://developer.spark.xd.com/dashboard/p_95jd/firm0_lv_2_4_1"
             },
             "游戏3": {
                 "项目ID": "p_95jd",
-                "发送的奖励": "$p_95jd.lobby_resource.金币.root:5000",
+                "发送的奖励": "$$p_95jd.lobby_resource.魂晶.root:999",
                 "URL": "https://developer.spark.xd.com/dashboard/p_95jd/firm0_lv_2_4_1"
             },
             "游戏4": {
                 "项目ID": "p_95jd",
-                "发送的奖励": "$p_95jd.lobby_resource.钻石.root:50",
+                "发送的奖励": "$$p_95jd.lobby_resource.魂晶.root:999",
                 "URL": "https://developer.spark.xd.com/dashboard/p_95jd/firm0_lv_2_4_1"
             }
         }
         self.抽奖数据列表 = {
             "捉妖:钟馗": {
-                "魂晶": "$p_95jd.lobby_resource.魂晶.root",
+                "魂晶": "$$p_95jd.lobby_resource.魂晶.root",
                 "奖品2": "奖励B",
                 "奖品3": "奖励C"
             },
@@ -1545,7 +1545,8 @@ class MyPlugin(Star):
                 if ":" in 奖励内容:
                     # 确保奖励字符串有正确的$前缀
                     if not 奖励内容.startswith("$"):
-                        奖励内容 = "$" + 奖励内容
+                        # 如果已经有一个$前缀，保留并添加另一个$，否则添加两个$
+                        奖励内容 = "$" + 奖励内容 if 奖励内容.startswith("$") else "$" + 奖励内容
                     attachment = 奖励内容  # 使用格式化后的完整奖励字符串
                     logger.info(f"使用传入的完整奖励字符串作为附件: '{奖励内容}'")
                     
@@ -1570,7 +1571,8 @@ class MyPlugin(Star):
                 else:
                     # 如果没有数量信息，确保有$前缀并默认为1个
                     if not 奖励内容.startswith("$"):
-                        奖励内容 = "$" + 奖励内容
+                        # 如果已经有一个$前缀，保留并添加另一个$，否则添加两个$
+                        奖励内容 = "$" + 奖励内容 if 奖励内容.startswith("$") else "$" + 奖励内容
                     attachment = 奖励内容
                     logger.info(f"使用传入的奖励ID作为附件: '{奖励内容}'")
             # 如果没有传入有效奖励内容，再尝试从游戏配置获取
@@ -1578,7 +1580,8 @@ class MyPlugin(Star):
                 奖励字符串 = self.game_configs[游戏名称]["发送的奖励"]
                 # 确保奖励字符串有正确的$前缀
                 if not 奖励字符串.startswith("$"):
-                    奖励字符串 = "$" + 奖励字符串
+                    # 如果已经有一个$前缀，保留并添加另一个$，否则添加两个$
+                    奖励字符串 = "$" + 奖励字符串 if 奖励字符串.startswith("$") else "$" + 奖励字符串
                 logger.info(f"从游戏配置获取的奖励字符串: '{奖励字符串}'")
                 attachment = 奖励字符串
                 
@@ -1608,10 +1611,12 @@ class MyPlugin(Star):
             # 先验证current_token是否有效
             token_to_use = self.current_token or 认证令牌
             if not token_to_use or len(token_to_use) < 10:  # 简单的长度验证
-                print("警告: 当前token可能无效，尝试使用默认token")
+                print("[邮件] 警告: 当前token可能无效，尝试使用默认token")
                 token_to_use = self.auth_token
             
-            logger.info(f"使用存储的token发送邮件，token长度: {len(token_to_use)} 字符")
+            print(f"[邮件] 准备发送邮件 - 用户ID: {发送的用户}, 项目ID: {项目ID}")
+            print(f"[邮件] 使用的token长度: {len(token_to_use)} 字符")
+            print(f"[邮件] 邮件标题: {邮件标题}, 附件: {attachment}")
             
             # 创建邮件服务并发送邮件（增加重试设置）
             email_service = EmailService(
@@ -1619,7 +1624,9 @@ class MyPlugin(Star):
                 project_id=项目ID,
                 max_retries=3
             )
+            print("[邮件] 开始调用邮件服务发送邮件...")
             result = await email_service.quick_send(邮件标题, 邮件正文, 发送的用户, attachment=attachment)
+            print(f"[邮件] 邮件服务返回结果: {result}")
             
             # 检查是否是token相关错误或400错误
             message = result.get('message', '')
@@ -1679,12 +1686,15 @@ class MyPlugin(Star):
             
             # 检查结果是否成功
             if result.get('success'):
+                print(f"[邮件] ✅ 奖励邮件发送成功: {发送的用户}")
                 logger.info(f"奖励邮件发送成功: {发送的用户}")
                 return True
             else:
                 # 获取错误信息，特别处理不同类型的错误
                 error_msg = result.get('message')
+                status_code = result.get('status_code')
                 detailed_error = error_msg
+                print(f"[邮件] ❌ 奖励邮件发送失败: {发送的用户}, 状态码: {status_code}, 错误信息: {error_msg}")
                 
                 # 如果是NO_ROW_ID错误，收集更详细的错误信息
                 if result.get('error_code') == 'NO_ROW_ID':
@@ -1845,14 +1855,23 @@ class MyPlugin(Star):
             邮件标题 = "签到奖励"
             邮件正文 = f"恭喜您在{游戏名称}签到成功！"
 
-            邮件返回值 = await self.send_personal_reward_email(self.auth_token, 项目ID, 发送的奖励, 发送的用户, 邮件标题, 邮件正文, 游戏名称)
+            # 先更新签到状态，确保用户签到成功
+            Json.添加或更新("玩家今天是否签到过.json", 复合键, "true")
+            print(f"[签到] 用户{author_id}在{游戏名称}的签到状态已更新")
             
-            if 邮件返回值:
-                # 更新签到状态
-                Json.添加或更新("玩家今天是否签到过.json", 复合键, "true")
-                
-                # 处理连续签到
-                async for msg in self.handle_continuous_checkin(event, author_id, 游戏名称):
+            # 发送奖励邮件
+            邮件返回值 = await self.send_personal_reward_email(self.auth_token, 项目ID, 发送的奖励, 发送的用户, 邮件标题, 邮件正文, 游戏名称)
+            print(f"[签到] 邮件发送结果: {邮件返回值}")
+            
+            # 无论邮件是否发送成功，都处理连续签到并显示签到成功消息
+            # 处理连续签到
+            async for msg in self.handle_continuous_checkin(event, author_id, 游戏名称):
+                yield msg
+            
+            # 如果邮件发送失败，添加提示信息
+            if not 邮件返回值:
+                print(f"[签到] 警告: 邮件发送失败，但签到已记录")
+                async for msg in self.发送消息(event, "⚠️ 签到记录已保存，但奖励邮件发送失败，请稍后尝试或联系管理员"):
                     yield msg
         else:
             async for msg in self.发送消息(event, f"您今天已经在{游戏名称}签到过了，请明天再来！"):
@@ -2278,18 +2297,29 @@ class MyPlugin(Star):
         游戏名称 = 数据.get('游戏名称', '')
         奖励数量 = 数据.get('奖励数量', 1)
         
-        # 优化奖励字符串构建：优先从游戏配置获取基础奖励字符串
+        # 优化奖励字符串构建：优先从抽奖数据列表中根据奖励名称获取对应的ID
         奖励基础字符串 = ""
-        # 首先从game_configs获取奖励配置
-        if 游戏名称 in self.game_configs:
-            奖励基础字符串 = self.game_configs[游戏名称].get('发送的奖励', '')
+        奖励名称 = 数据.get('奖励名称', '')
         
-        # 如果game_configs中没有，再尝试从抽奖数据列表获取
-        if not 奖励基础字符串 and hasattr(self, '抽奖数据列表') and isinstance(self.抽奖数据列表, dict):
+        # 首先从抽奖数据列表获取对应游戏和奖励名称的ID
+        if hasattr(self, '抽奖数据列表') and isinstance(self.抽奖数据列表, dict):
             游戏配置 = self.抽奖数据列表.get(游戏名称, {})
-            奖励基础字符串 = 游戏配置.get('发送的奖励', '')
+            if 游戏配置 and 奖励名称 in 游戏配置:
+                奖励基础字符串 = 游戏配置[奖励名称]
         
-        # 正确构建奖励字符串，确保格式为"$p_95jd.lobby_resource.魂晶.root:999"（根据实际数量）
+        # 正确构建奖励字符串，确保格式为"$$p_95jd.lobby_resource.魂晶.root:999"（根据实际数量）
+        # 确保奖励基础字符串有正确的$$前缀
+        if 奖励基础字符串:
+             # 检查前缀情况并添加正确的$$前缀
+            if 奖励基础字符串.startswith("$"):
+                # 已经有两个$前缀，保持不变
+                pass
+            elif 奖励基础字符串.startswith("$"):
+                # 已有一个$前缀，添加一个$
+                奖励基础字符串 = "$" + 奖励基础字符串
+            else:
+                # 没有$前缀，添加两个$
+                奖励基础字符串 = "$" + 奖励基础字符串
         奖励字符串 = f"{奖励基础字符串}:{奖励数量}" if 奖励基础字符串 else ""
 
         for 获奖者ID in 获奖者:
@@ -2481,3 +2511,212 @@ class MyPlugin(Star):
             json.dump(抽奖数据, f, ensure_ascii=False, indent=2)
         async for msg in self.发送消息(event, f"✅ 参与成功！\n\n您已成功参与抽奖ID为{抽奖ID}的抽奖活动\n\n现在您的参与人数：{len(数据.get('参与者', []))}\n\n🎁 祝您好运！🎁"):
                 yield msg
+
+    @filter.event_message_type(EventMessageType.ALL)
+    async def auto_message_listener(self, event: AstrMessageEvent):
+        """自动消息监听器 - 监听所有消息并记录群成员发言统计"""
+        # 检查是否启用了自动记录功能
+        if not self.plugin_config or not getattr(self.plugin_config, 'auto_record_enabled', True):
+            logger.info("自动记录功能已禁用")
+            return
+            
+        # 跳过命令消息
+        message_str = getattr(event, 'message_str', '')
+        if message_str.startswith(('%', '/')):
+            return
+        
+        # 获取基本信息
+        group_id = event.get_group_id()
+        user_id = event.get_sender_id()
+        
+        # 跳过非群聊或无效用户
+        if not group_id or not user_id:
+            return
+        
+        # 转换为字符串并跳过机器人
+        group_id, user_id = str(group_id), str(user_id)
+        if self._is_bot_message(event, user_id):
+            return
+        
+        # 收集群组的unified_msg_origin（重要：用于定时推送）
+        await self._collect_group_unified_msg_origin(event)
+        
+        # 获取用户昵称并记录统计
+        nickname = await self._get_user_display_name(event, group_id, user_id)
+        await self._record_message_stats(group_id, user_id, nickname)
+    
+    def _is_bot_message(self, event: AstrMessageEvent, user_id: str) -> bool:
+        """检查是否为机器人消息"""
+        try:
+            self_id = event.get_self_id()
+            return self_id and user_id == str(self_id)
+        except (AttributeError, KeyError, TypeError):
+            return False
+    
+    async def _record_message_stats(self, group_id: str, user_id: str, nickname: str):
+        """记录消息统计
+        
+        内部方法,用于记录群成员的消息统计数据.会自动验证输入参数并更新数据.
+        
+        Args:
+            group_id (str): 群组ID,必须是5-12位数字字符串
+            user_id (str): 用户ID,必须是1-20位数字字符串
+            nickname (str): 用户昵称,会进行HTML转义和安全验证
+            
+        Raises:
+            ValueError: 当参数验证失败时抛出
+            TypeError: 当参数类型错误时抛出
+            KeyError: 当数据格式错误时抛出
+            
+        Returns:
+            None: 无返回值,记录结果通过日志输出
+            
+        Example:
+            >>> await self._record_message_stats("123456789", "987654321", "用户昵称")
+            # 将在数据管理器中更新该用户的发言统计
+        """
+        try:
+            # 步骤1: 验证输入数据
+            validated_data = await self._validate_message_data(group_id, user_id, nickname)
+            group_id, user_id, nickname = validated_data
+            
+            # 步骤2: 处理消息统计和记录
+            await self._process_message_stats(group_id, user_id, nickname)
+            logger.info(f"成功记录用户{nickname}({user_id})在群组{group_id}的消息统计")
+            
+        except ValueError as e:
+            self.logger.error(f"记录消息统计失败(参数验证错误): {e}", exc_info=True)
+        except TypeError as e:
+            self.logger.error(f"记录消息统计失败(类型错误): {e}", exc_info=True)
+        except KeyError as e:
+            self.logger.error(f"记录消息统计失败(数据格式错误): {e}", exc_info=True)
+        except asyncio.TimeoutError as e:
+            self.logger.error(f"记录消息统计失败(超时错误): {e}", exc_info=True)
+        except ConnectionError as e:
+            self.logger.error(f"记录消息统计失败(连接错误): {e}", exc_info=True)
+        except asyncio.CancelledError as e:
+            self.logger.error(f"记录消息统计失败(操作取消): {e}", exc_info=True)
+        except (IOError, OSError) as e:
+            self.logger.error(f"记录消息统计失败(系统错误): {e}", exc_info=True)
+        except AttributeError as e:
+            self.logger.error(f"记录消息统计失败(属性错误): {e}", exc_info=True)
+        except RuntimeError as e:
+            self.logger.error(f"记录消息统计失败(运行时错误): {e}", exc_info=True)
+        except ImportError as e:
+            self.logger.error(f"记录消息统计失败(导入错误): {e}", exc_info=True)
+        except (FileNotFoundError, PermissionError, UnicodeError, MemoryError, SystemError) as e:
+            # 修复：替换过于宽泛的Exception为具体异常类型
+            self.logger.error(f"记录消息统计失败(系统资源错误): {e}", exc_info=True)
+    
+    @data_operation_handler('validate', '消息数据参数')
+    async def _validate_message_data(self, group_id: str, user_id: str, nickname: str) -> tuple:
+        """验证消息数据参数
+        
+        验证输入的群组ID、用户ID和昵称参数，确保数据格式正确。
+        
+        Args:
+            group_id (str): 群组ID
+            user_id (str): 用户ID
+            nickname (str): 用户昵称
+            
+        Returns:
+            tuple: 验证后的 (group_id, user_id, nickname) 元组
+            
+        Raises:
+            ValueError: 当参数验证失败时抛出
+            TypeError: 当参数类型错误时抛出
+        """
+        # 验证数据
+        group_id = Validators.validate_group_id(group_id)
+        user_id = Validators.validate_user_id(user_id)
+        nickname = Validators.validate_nickname(nickname)
+        
+        return group_id, user_id, nickname
+    
+    async def _process_message_stats(self, group_id: str, user_id: str, nickname: str):
+        """处理消息统计和记录
+        
+        执行实际的消息统计更新操作，并记录结果日志。
+        
+        Args:
+            group_id (str): 验证后的群组ID
+            user_id (str): 验证后的用户ID
+            nickname (str): 验证后的用户昵称
+            
+        Raises:
+            KeyError: 当数据格式错误时抛出
+            asyncio.TimeoutError: 当异步操作超时时抛出
+            ConnectionError: 当连接错误时抛出
+            asyncio.CancelledError: 当操作取消时抛出
+            IOError: 当文件操作错误时抛出
+            OSError: 当系统操作错误时抛出
+            AttributeError: 当属性访问错误时抛出
+            RuntimeError: 当运行时错误时抛出
+            ImportError: 当导入错误时抛出
+            FileNotFoundError: 当文件未找到时抛出
+            PermissionError: 当权限错误时抛出
+            UnicodeError: 当编码错误时抛出
+            MemoryError: 当内存错误时抛出
+            SystemError: 当系统错误时抛出
+        """
+        # 直接使用data_manager更新用户消息
+        success = await self.data_manager.update_user_message(group_id, user_id, nickname)
+        
+        if success:
+            # 只在开启详细日志时记录消息统计
+            if self.plugin_config.detailed_logging_enabled:
+                self.logger.info(f"记录消息统计: {nickname}")
+        else:
+            self.logger.error(f"记录消息统计失败: {nickname}")
+    
+    # ========== 排行榜命令 ==========
+    
+    @filter.command("更新发言统计")
+    async def update_message_stats(self, event: AstrMessageEvent):
+        """手动更新发言统计"""
+        try:
+            # 使用AstrBot官方API获取群组ID和用户ID
+            group_id = event.get_group_id()
+            user_id = event.get_sender_id()
+            
+            if not group_id:
+                yield event.plain_result("无法获取群组信息,请在群聊中使用此命令！")
+                return
+                
+            if not user_id:
+                yield event.plain_result("无法获取用户信息！")
+                return
+            
+            group_id = str(group_id)
+            user_id = str(user_id)
+            
+            # 获取用户显示名称(优先使用群昵称)
+            user_name = await self._get_user_display_name(event, group_id, user_id)
+            
+            # 记录当前用户的发言
+            await self.data_manager.update_user_message(group_id, user_id, user_name)
+            
+            yield event.plain_result(f"已记录 {user_name} 的发言统计！")
+            
+        except AttributeError as e:
+            self.logger.error(f"更新发言统计失败(属性错误): {e}", exc_info=True)
+            yield event.plain_result("更新发言统计失败,请稍后重试")
+        except KeyError as e:
+            self.logger.error(f"更新发言统计失败(数据格式错误): {e}", exc_info=True)
+            yield event.plain_result("更新发言统计失败,请稍后重试")
+        except TypeError as e:
+            self.logger.error(f"更新发言统计失败(类型错误): {e}", exc_info=True)
+            yield event.plain_result("更新发言统计失败,请稍后重试")
+        except (IOError, OSError, FileNotFoundError) as e:
+            self.logger.error(f"更新发言统计失败(文件操作错误): {e}", exc_info=True)
+            yield event.plain_result("更新发言统计失败,请稍后重试")
+        except ValueError as e:
+            self.logger.error(f"更新发言统计失败(参数错误): {e}", exc_info=True)
+            yield event.plain_result("更新发言统计失败,请稍后重试")
+        except RuntimeError as e:
+            self.logger.error(f"更新发言统计失败(运行时错误): {e}", exc_info=True)
+            yield event.plain_result("更新发言统计失败,请稍后重试")
+        except (ConnectionError, asyncio.TimeoutError, ImportError, PermissionError) as e:
+            # 修复：替换过于宽泛的Exception为具体异常类型
+            self.logger.error(f"更新发言统计失败(网络或系统错误): {e}", exc_info=True)
+            yield event.plain_result("更新发言统计失败,请稍后重试")
