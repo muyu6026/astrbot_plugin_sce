@@ -2334,7 +2334,7 @@ class MyPlugin(Star):
         # 正确构建奖励字符串，确保格式为"$$p_95jd.lobby_resource.魂晶.root:999"（根据实际数量）
         # 确保奖励基础字符串有正确的$$前缀
         if 奖励基础字符串:
-             # 检查前缀情况并添加正确的$$前缀
+             # 检查前缀情况并添加正确的$前缀
             if 奖励基础字符串.startswith("$"):
                 # 已经有两个$前缀，保持不变
                 pass
@@ -2387,8 +2387,11 @@ class MyPlugin(Star):
                 # 检查返回值是否是协程或异步生成器
                 if hasattr(result, '__await__'):
                     # 是协程，直接await
-                    await result
-                    logger.info(f"邮件发送完成给用户 {发送的用户}")
+                    send_success = await result
+                    if send_success:
+                        logger.info(f"邮件发送成功给用户 {发送的用户}")
+                    else:
+                        logger.warning(f"邮件添加到后台但可能未成功发送给用户 {发送的用户}")
                 elif hasattr(result, '__aiter__'):
                     # 是异步生成器，使用async for
                     async for _ in result:
@@ -2396,6 +2399,25 @@ class MyPlugin(Star):
                 else:
                     # 是普通值，直接忽略
                     pass
+                
+                # 发送邮件发送结果通知到群聊
+                try:
+                    群聊ID=数据.get('群聊ID')
+                    if 群聊ID and send_success:
+                        # 复制事件对象并设置正确的群聊ID
+                        try:
+                            if hasattr(event, 'platform_meta') and isinstance(event.platform_meta, dict):
+                                event.platform_meta['group_id'] = 群聊ID
+                            
+                            # 构建通知消息
+                            通知消息=f"✅ 奖励发放成功 ✅\n\n🎮 游戏名称：{游戏名称}\n👤 玩家：{获奖者ID}\n🎁 奖励：{奖励名称} x{奖励数量}\n\n奖励已通过邮件发放，请查收。"
+                            logger.info(f"准备发送邮件发放通知到群聊: {群聊ID}")
+                            # 直接发送消息，不使用异步生成器方式
+                            await event.plain_result(通知消息)
+                        except Exception as notify_error:
+                            logger.error(f"发送邮件发放通知到群聊时出错: {notify_error}")
+                except Exception as e:
+                    logger.error(f"处理群聊通知时出错: {e}")
             except Exception as email_error:
                 logger.error(f"发送奖励邮件时出错: {email_error}")
         #删除抽奖数据
