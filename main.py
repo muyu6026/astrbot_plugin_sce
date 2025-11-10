@@ -2383,6 +2383,38 @@ class MyPlugin(Star):
             # 检查send_personal_reward_email是否返回异步生成器
             try:
                 logger.info(f"准备发送邮件给用户 {发送的用户}，奖励: {奖励字符串}")
+                # 先发送开奖信息到群聊，不依赖邮件发送结果
+                try:
+                    群聊ID=数据.get('群聊ID')
+                    if 群聊ID:
+                        # 设置正确的群聊ID
+                        try:
+                            if hasattr(event, 'platform_meta') and isinstance(event.platform_meta, dict):
+                                event.platform_meta['group_id'] = 群聊ID
+                            
+                            # 构建开奖通知消息
+                            通知消息=f"🎊 开奖结果通知 🎊\n\n🎮 游戏名称：{游戏名称}\n👤 获奖者：{获奖者ID}\n🎁 奖励：{奖励名称} x{奖励数量}\n\n奖励正在发放中，请留意系统邮件。"
+                            logger.info(f"准备发送开奖通知到群聊: {群聊ID}")
+                            # 直接发送消息
+                            await event.plain_result(通知消息)
+                        except Exception as notify_error:
+                            logger.error(f"发送开奖通知到群聊时出错: {notify_error}")
+                            # 尝试备用发送方式
+                            try:
+                                backup_event = AstrMessageEvent(
+                                    message_str='',
+                                    message_obj=None,
+                                    platform_meta={'group_id': 群聊ID},
+                                    session_id=f'lottery_notify_{抽奖ID}'
+                                )
+                                await backup_event.plain_result(通知消息)
+                                logger.info("使用备用方式发送开奖通知成功")
+                            except Exception as backup_error:
+                                logger.error(f"备用方式发送开奖通知也失败: {backup_error}")
+                except Exception as e:
+                    logger.error(f"处理群聊通知时出错: {e}")
+                
+                # 然后处理邮件发送
                 result = self.send_personal_reward_email(self.auth_token, 项目ID, 奖励字符串, 发送的用户, 邮件标题, 邮件正文, 数据.get('游戏名称', '未知游戏'))
                 # 检查返回值是否是协程或异步生成器
                 if hasattr(result, '__await__'):
@@ -2399,25 +2431,6 @@ class MyPlugin(Star):
                 else:
                     # 是普通值，直接忽略
                     pass
-                
-                # 发送邮件发送结果通知到群聊
-                try:
-                    群聊ID=数据.get('群聊ID')
-                    if 群聊ID and send_success:
-                        # 复制事件对象并设置正确的群聊ID
-                        try:
-                            if hasattr(event, 'platform_meta') and isinstance(event.platform_meta, dict):
-                                event.platform_meta['group_id'] = 群聊ID
-                            
-                            # 构建通知消息
-                            通知消息=f"✅ 奖励发放成功 ✅\n\n🎮 游戏名称：{游戏名称}\n👤 玩家：{获奖者ID}\n🎁 奖励：{奖励名称} x{奖励数量}\n\n奖励已通过邮件发放，请查收。"
-                            logger.info(f"准备发送邮件发放通知到群聊: {群聊ID}")
-                            # 直接发送消息，不使用异步生成器方式
-                            await event.plain_result(通知消息)
-                        except Exception as notify_error:
-                            logger.error(f"发送邮件发放通知到群聊时出错: {notify_error}")
-                except Exception as e:
-                    logger.error(f"处理群聊通知时出错: {e}")
             except Exception as email_error:
                 logger.error(f"发送奖励邮件时出错: {email_error}")
         #删除抽奖数据
